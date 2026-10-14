@@ -935,6 +935,25 @@ fn source_folder_is_suggested_and_original_file_cannot_be_exported_over() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn export_refuses_hardlink_aliases_of_source_media() {
+    let dir = tmp_dir("source-hardlink-protection");
+    let mut s = demo();
+    let id = import_png(&mut s, &dir, "source.png", 32, 18);
+    s.execute("timeline.place", json!({"item":id.0,"track":"V1","time":0})).unwrap();
+    let source = dir.join("source.png");
+    let alias = dir.join("alternate.png");
+    std::fs::hard_link(&source, &alias).unwrap();
+    let original = std::fs::read(&source).unwrap();
+    for command in ["file.exportMedia", "export.queue.add"] {
+        assert!(s.execute(command, json!({"path":alias,"format":"png"})).is_err());
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    assert!(s.export_queue.items.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn imported_picture_covers_all_corners_of_a_vertical_sequence() {
     let mut s = Session::default();

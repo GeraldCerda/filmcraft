@@ -424,9 +424,62 @@ enum AudioWriter {
     Flac(Box<filmcraft_flac::Encoder>),
 }
 
-/// An export's output file: on disk, or in memory for an [`OutputSink`].
+struct StagedFile {
+    writer: std::io::BufWriter<std::fs::File>,
+    temporary: std::path::PathBuf,
+    target_state: Option<(u64, Option<std::time::SystemTime>)>,
+}
+
+impl StagedFile {
+    fn state(path: &std::path::Path) -> std::io::Result<Option<(u64, Option<std::time::SystemTime>)>> {
+        match std::fs::metadata(path) {
+            Ok(metadata) => Ok(Some((metadata.len(), metadata.modified().ok()))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn new(path: &str) -> Result<Self> {
+        let target = std::path::Path::new(path);
+        let state = Self::state(target).map_err(|error| ExportError::Io(format!("{path}: {error}")))?;
+        let name = target.file_name().ok_or_else(|| ExportError::Io(format!("{path}: invalid destination")))?;
+        static NEXT_STAGE: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..128 {
+            let index = NEXT_STAGE.fetch_add(1, Ordering::Relaxed);
+            let name = format!(".{}.filmcraft-{}-{index}.partial", name.to_string_lossy(), std::process::id());
+            let temporary = target.with_file_name(name);
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary) {
+                Ok(file) => {
+                    return Ok(Self { writer: std::io::BufWriter::new(file), temporary, target_state: state });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(ExportError::Io(format!("{}: {error}", temporary.display()))),
+            }
+        }
+        Err(ExportError::Io(format!("{path}: could not allocate a temporary output file")))
+    }
+
+    fn finish(mut self, path: &str) -> Result<u64> {
+        self.writer.flush().map_err(|error| ExportError::Io(error.to_string()))?;
+        self.writer.get_ref().sync_all().map_err(|error| ExportError::Io(error.to_string()))?;
+        let target = std::path::Path::new(path);
+        let current = Self::state(target).map_err(|error| ExportError::Io(error.to_string()))?;
+        if current != self.target_state {
+            return Err(ExportError::Io(format!("{path}: the destination changed during export")));
+        }
+        std::fs::rename(&self.temporary, target).map_err(|error| ExportError::Io(format!("{path}: {error}")))?;
+        std::fs::metadata(target).map(|m| m.len()).map_err(|error| ExportError::Io(format!("{path}: {error}")))
+    }
+}
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.temporary);
+    }
+}
+
 enum Out {
-    File(std::io::BufWriter<std::fs::File>),
+    File(StagedFile),
     Mem(std::io::Cursor<Vec<u8>>),
 }
 
@@ -435,53 +488,48 @@ impl Out {
         Out::create_path(settings, &settings.path)
     }
 
-    /// An output file at `path` (OP-Atom exports write several).
     fn create_path(settings: &ExportSettings, path: &str) -> Result<Out> {
         if settings.sink.is_some() {
             return Ok(Out::Mem(std::io::Cursor::new(Vec::new())));
         }
-        let f = std::fs::File::create(path).map_err(|e| ExportError::Io(format!("{path}: {e}")))?;
-        Ok(Out::File(std::io::BufWriter::new(f)))
+        Ok(Out::File(StagedFile::new(path)?))
     }
 
-    /// Flush (and hand in-memory output to the sink); returns the file size.
     fn finish(self, settings: &ExportSettings) -> Result<u64> {
         self.finish_path(settings, &settings.path)
     }
 
     fn finish_path(self, settings: &ExportSettings, path: &str) -> Result<u64> {
         match self {
-            Out::File(mut w) => {
-                w.flush().map_err(|e| ExportError::Io(e.to_string()))?;
-                Ok(std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
-            }
-            Out::Mem(c) => write_output(settings, path, c.into_inner()),
+            Out::File(file) => file.finish(path),
+            Out::Mem(cursor) => write_output(settings, path, cursor.into_inner()),
         }
     }
 }
 
-/// Write one finished output file (to the sink when there is one); returns its size.
 fn write_output(settings: &ExportSettings, path: &str, data: Vec<u8>) -> Result<u64> {
     let n = data.len() as u64;
-    match &settings.sink {
-        Some(sink) => (sink.0)(path, data),
-        None => std::fs::write(path, &data),
+    if let Some(sink) = &settings.sink {
+        (sink.0)(path, data).map_err(|error| ExportError::Io(error.to_string()))?;
+    } else {
+        let mut file = StagedFile::new(path)?;
+        file.writer.write_all(&data).map_err(|error| ExportError::Io(error.to_string()))?;
+        file.finish(path)?;
     }
-    .map_err(|e| ExportError::Io(e.to_string()))?;
     Ok(n)
 }
 
 impl Write for Out {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
-            Out::File(w) => w.write(buf),
-            Out::Mem(w) => w.write(buf),
+            Out::File(file) => file.writer.write(buf),
+            Out::Mem(cursor) => cursor.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
-            Out::File(w) => w.flush(),
-            Out::Mem(w) => w.flush(),
+            Out::File(file) => file.writer.flush(),
+            Out::Mem(cursor) => cursor.flush(),
         }
     }
 }
@@ -489,8 +537,8 @@ impl Write for Out {
 impl std::io::Seek for Out {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         match self {
-            Out::File(w) => w.seek(pos),
-            Out::Mem(w) => w.seek(pos),
+            Out::File(file) => file.writer.seek(pos),
+            Out::Mem(cursor) => cursor.seek(pos),
         }
     }
 }
@@ -1995,6 +2043,45 @@ pub fn export(project: &Arc<Project>, seq: ItemId, settings: &ExportSettings, so
         progress.set_status(format!("Done in {secs:.1}s"));
     }
     Ok(Report { path: settings.path.clone(), frames: nframes, seconds: secs, bytes, render_fps: nframes as f64 / secs.max(1e-6), extra_files: Vec::new() })
+}
+
+#[cfg(test)]
+mod staged_file_tests {
+    use super::*;
+
+    #[test]
+    fn failed_export_does_not_damage_existing_destination() {
+        let dir = std::env::temp_dir().join(format!("filmcraft-staged-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("preserved.mov");
+        std::fs::write(&path, b"original").unwrap();
+        {
+            let mut output = StagedFile::new(path.to_str().unwrap()).unwrap();
+            output.writer.write_all(b"incomplete").unwrap();
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        let entries = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(entries, 1);
+        let mut output = StagedFile::new(path.to_str().unwrap()).unwrap();
+        output.writer.write_all(b"complete").unwrap();
+        output.finish(path.to_str().unwrap()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"complete");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_destination_change_aborts_finalization() {
+        let dir = std::env::temp_dir().join(format!("filmcraft-staged-conflict-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("conflict.mov");
+        std::fs::write(&path, b"old").unwrap();
+        let mut output = StagedFile::new(path.to_str().unwrap()).unwrap();
+        output.writer.write_all(b"rendered").unwrap();
+        std::fs::write(&path, b"changed externally").unwrap();
+        assert!(output.finish(path.to_str().unwrap()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"changed externally");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[cfg(test)]

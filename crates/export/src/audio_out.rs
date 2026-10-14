@@ -79,6 +79,9 @@ impl AudioOut {
             }
             let n = (self.end - pos).min(self.sr as i64) as usize;
             let buf = self.mix(pos, n, sources);
+            if filmcraft_media::pending::is_set() {
+                return Ok(());
+            }
             let refs: Vec<&[f32]> = buf.iter().map(Vec::as_slice).collect();
             meter.process(&refs);
             pos += n as i64;
@@ -106,6 +109,10 @@ impl AudioOut {
                     if let Some(buf) = self.pull(until, sources) {
                         let refs: Vec<&[f32]> = buf.iter().map(Vec::as_slice).collect();
                         limited.process(&refs);
+                    }
+                    if filmcraft_media::pending::is_set() {
+                        self.rewind(start, best_gain);
+                        return Ok(());
                     }
                 }
                 let achieved = limited.integrated();
@@ -178,6 +185,9 @@ impl AudioOut {
         let want_in = until + self.latency;
         let n_in = (want_in - self.next_in).max(0) as usize;
         let mut buf = self.mix(self.next_in, n_in, sources);
+        if filmcraft_media::pending::is_set() {
+            return None;
+        }
         // the first call also fills the limiter's look-ahead
         let drop = (self.latency - (self.next_in - self.out)).clamp(0, n_in as i64) as usize;
         self.next_in = want_in;
@@ -218,6 +228,46 @@ pub(crate) fn interleave(planar: &[Vec<f32>]) -> Vec<f32> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod pending_audio_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct PendingOnce<'a> {
+        inner: &'a filmcraft_render::SourceMap,
+        item: ItemId,
+        ready: AtomicBool,
+    }
+
+    impl filmcraft_render::SourceProvider for PendingOnce<'_> {
+        fn source(&self, item: ItemId) -> Option<filmcraft_media::SharedSource> {
+            if item == self.item && !self.ready.swap(true, Ordering::Relaxed) {
+                filmcraft_media::pending::mark();
+                return None;
+            }
+            self.inner.source(item)
+        }
+    }
+
+    #[test]
+    fn pending_audio_does_not_advance_the_sample_cursor() {
+        let (project, sequence, sources) = crate::tests::project();
+        let tone = project.sequence(sequence).unwrap().audio_tracks[0].items[0].item;
+        let settings = ExportSettings::default();
+        let range = filmcraft_time::TimeRange::new(filmcraft_time::Tick::ZERO, filmcraft_time::FrameRate::FPS_24.tick_of(24));
+        let mut audio = AudioOut::new(project.clone(), sequence, &settings, range).unwrap();
+        let pending = PendingOnce { inner: &sources, item: tone, ready: AtomicBool::new(false) };
+        assert!(audio.pull(48_000, &pending).is_none());
+        assert!(filmcraft_media::pending::take());
+        assert_eq!(audio.out, 0);
+        assert_eq!(audio.next_in, 0);
+        let recovered = audio.pull(48_000, &pending).unwrap();
+        let mut reference = AudioOut::new(project, sequence, &settings, range).unwrap();
+        let clean = reference.pull(48_000, &sources).unwrap();
+        assert_eq!(recovered, clean);
+    }
 }
 
 #[cfg(test)]

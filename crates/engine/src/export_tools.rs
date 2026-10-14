@@ -455,7 +455,7 @@ fn output_path(s: &Session, p: &Value, seq: ItemId, settings: &ExportSettings, s
 }
 
 /// Write the caption sidecar (`settings.caption_sidecar`) next to `path` for `range` of `seq`.
-fn write_sidecar(s: &Session, project: &Project, seq: ItemId, settings: &ExportSettings) -> Result<Option<String>> {
+fn prepare_sidecar(project: &Project, seq: ItemId, settings: &ExportSettings) -> Result<Option<(String, Vec<u8>)>> {
     let Some(kind) = settings.caption_sidecar.as_deref() else { return Ok(None) };
     let q = project.sequence(seq).ok_or(EngineError::NoSequence)?;
     let Some(track) = q.caption_tracks.first() else { return Ok(None) };
@@ -470,18 +470,25 @@ fn write_sidecar(s: &Session, project: &Project, seq: ItemId, settings: &ExportS
         filmcraft_captions::write(&doc, format, filmcraft_captions::WriteOptions { drop_frame: q.settings.drop_frame, rate: Some(q.settings.frame_rate) });
     let ext = if format == filmcraft_captions::Format::WebVtt { "vtt" } else { kind };
     let path = format!("{}.{ext}", settings.path.rsplit_once('.').map_or(settings.path.as_str(), |x| x.0));
-    s.services.write_file(&path, &bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    Ok(Some(path))
+    Ok(Some((path, bytes)))
 }
 
 /// Run an export of `seq` in `project` as a background job (or now, with `wait`); returns the job id.
 fn protect_source_media(project: &Project, path: &str) -> Result<()> {
     let canonical = std::fs::canonicalize(path).ok();
+    let target_metadata = std::fs::metadata(path).ok();
     let source = project.items.values().any(|item| {
         if let filmcraft_project::ItemKind::Media(media) = &item.kind
             && let filmcraft_project::MediaRef::File { path: source } = &media.media
         {
-            return source == path || canonical.as_ref().is_some_and(|p| std::fs::canonicalize(source).ok().as_ref() == Some(p));
+            #[cfg(unix)]
+            let same_file = {
+                use std::os::unix::fs::MetadataExt;
+                target_metadata.as_ref().zip(std::fs::metadata(source).ok().as_ref()).is_some_and(|(a, b)| a.dev() == b.dev() && a.ino() == b.ino())
+            };
+            #[cfg(not(unix))]
+            let same_file = false;
+            return same_file || source == path || canonical.as_ref().is_some_and(|p| std::fs::canonicalize(source).ok().as_ref() == Some(p));
         }
         false
     });
@@ -493,6 +500,11 @@ fn protect_source_media(project: &Project, path: &str) -> Result<()> {
 
 pub fn spawn_export(s: &mut Session, project: Arc<Project>, seq: ItemId, mut settings: ExportSettings, label: String, wait: bool) -> Result<u64> {
     protect_source_media(&project, &settings.path)?;
+    let sidecar = prepare_sidecar(&project, seq, &settings)?;
+    if let Some((path, _)) = &sidecar {
+        protect_source_media(&project, path)?;
+    }
+    let services = s.services.clone();
     let format = settings.format;
     if !filmcraft_export::available(format) {
         return Err(EngineError::Other(format!("{} export is not available (no encoder registered)", format.label())));
@@ -504,7 +516,6 @@ pub fn spawn_export(s: &mut Session, project: Arc<Project>, seq: ItemId, mut set
     if let Some(dir) = Path::new(&settings.path).parent().filter(|d| !d.as_os_str().is_empty() && !s.services.export_in_memory()) {
         let _ = std::fs::create_dir_all(dir);
     }
-    write_sidecar(s, &project, seq, &settings)?;
     let id = s.jobs.iter().map(|j| j.id).max().unwrap_or(0) + 1;
     let job = crate::Job { id, label, progress: Default::default(), result: Default::default() };
     // Export always renders full-resolution media, whatever the proxy toggle says.
@@ -520,7 +531,16 @@ pub fn spawn_export(s: &mut Session, project: Arc<Project>, seq: ItemId, mut set
         return Ok(id);
     }
     let run = move || {
-        let r = filmcraft_export::export(&project, seq, &settings, &provider, &prog).map_err(|e| e.to_string());
+        let r = filmcraft_export::export(&project, seq, &settings, &provider, &prog).map_err(|e| e.to_string()).and_then(|report| {
+            if let Some((path, bytes)) = &sidecar {
+                if services.export_in_memory() {
+                    services.write_file(path, bytes).map_err(|error| format!("{path}: {error}"))?;
+                } else {
+                    filmcraft_format::atomic_write(Path::new(path), bytes).map_err(|error| format!("{path}: {error}"))?;
+                }
+            }
+            Ok(report)
+        });
         *offline.lock().unwrap_or_else(|x| x.into_inner()) = provider.offline_used();
         if let Err(e) = &r {
             *prog.error.lock().unwrap_or_else(|x| x.into_inner()) = Some(e.clone());
