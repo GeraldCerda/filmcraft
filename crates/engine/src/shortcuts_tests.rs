@@ -20,6 +20,9 @@ fn with_ui_commands(s: &mut Session) {
         CommandInfo::new("playback.playAround", "Play Around", &[], None),
         CommandInfo::new("tool.razor", "Razor Tool", &[], Some("C")),
         CommandInfo::new("app.keyboardShortcuts", "Keyboard Shortcuts…", &["Edit"], Some("Cmd+Alt+K")),
+        CommandInfo::new("view.zoomIn", "Zoom In", &["View"], Some("=")),
+        CommandInfo::new("view.zoomOut", "Zoom Out", &["View"], Some("-")),
+        CommandInfo::new("mode.export", "Export", &["File", "Export"], Some("Cmd+M")),
     ]);
 }
 
@@ -49,6 +52,13 @@ fn defaults_follow_the_registry_and_the_premiere_audit() {
     let sc = &s.shortcuts;
     assert_eq!(sc.preset, "FilmCraft Default");
     assert_eq!(sc.primary("sequence.addEdit").as_deref(), Some("Cmd+E"));
+    assert_eq!(sc.primary("view.zoomOut").as_deref(), Some("Cmd+["));
+    assert_eq!(sc.primary("view.zoomIn").as_deref(), Some("Cmd+]"));
+    assert_eq!(sc.primary("edit.copy").as_deref(), Some("Cmd+C"));
+    assert_eq!(sc.primary("edit.cut").as_deref(), Some("Cmd+X"));
+    assert_eq!(sc.primary("file.save").as_deref(), Some("Cmd+S"));
+    assert_eq!(sc.primary("edit.undo").as_deref(), Some("Cmd+Z"));
+    assert_eq!(sc.primary("mode.export").as_deref(), Some("Cmd+Shift+R"));
     assert_eq!(sc.primary("playback.toggle").as_deref(), Some("Space"));
     // the audit adopts Premiere defaults for commands that had none
     let audit = sc.audit();
@@ -223,6 +233,56 @@ fn compat_presets_map_other_editors() {
     assert!(s.execute("shortcuts.loadPreset", json!({"name": "Nope"})).is_err());
     s.execute("shortcuts.loadPreset", json!({"name": "FilmCraft Default"})).unwrap();
     assert_eq!(s.shortcuts.primary("source.insert").as_deref(), Some(","));
+}
+
+#[test]
+fn modified_default_migrates_old_zoom_keys_without_changing_other_shortcuts() {
+    let dir = temp_dir("default-zoom-migration");
+    let mut original = Shortcuts::new();
+    original.register_external(vec![
+        CommandInfo::new("view.zoomIn", "Zoom In", &["View"], Some("=")),
+        CommandInfo::new("view.zoomOut", "Zoom Out", &["View"], Some("-")),
+    ]);
+    original.set_dir(&dir);
+    original.set("edit.undo", "Cmd+Alt+Z", None, false, false).unwrap();
+    original.set("view.zoomOut", "Cmd+Shift+[", None, false, false).unwrap();
+    original.set("view.zoomIn", "Cmd+Shift+]", None, false, false).unwrap();
+
+    let mut restored = Shortcuts::new();
+    restored.set_dir(&dir);
+    assert!(restored.modified);
+    assert_eq!(restored.preset, "FilmCraft Default");
+    assert_eq!(restored.primary("view.zoomOut").as_deref(), Some("Cmd+["));
+    assert_eq!(restored.primary("view.zoomIn").as_deref(), Some("Cmd+]"));
+    assert_eq!(restored.primary("edit.undo").as_deref(), Some("Cmd+Alt+Z"));
+    assert!(!restored.bindings.iter().any(|b| b.keys == "Cmd+Shift+[" || b.keys == "Cmd+Shift+]"));
+
+    let mut restarted = Shortcuts::new();
+    restarted.set_dir(&dir);
+    assert_eq!(restarted.bindings, restored.bindings);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn default_zoom_migration_preserves_conflicting_custom_shortcuts() {
+    let dir = temp_dir("default-zoom-collision");
+    let mut original = Shortcuts::new();
+    original.register_external(vec![
+        CommandInfo::new("view.zoomIn", "Zoom In", &["View"], Some("=")),
+        CommandInfo::new("view.zoomOut", "Zoom Out", &["View"], Some("-")),
+    ]);
+    original.set_dir(&dir);
+    original.set("view.zoomOut", "Cmd+Shift+[", None, false, false).unwrap();
+    original.set("view.zoomIn", "Cmd+Shift+]", None, false, false).unwrap();
+    original.set("edit.copy", "Cmd+[", None, false, false).unwrap();
+
+    let mut restored = Shortcuts::new();
+    restored.set_dir(&dir);
+    assert_eq!(restored.primary("edit.copy").as_deref(), Some("Cmd+["));
+    assert_eq!(restored.primary("view.zoomOut").as_deref(), Some("Cmd+Shift+["));
+    assert_eq!(restored.primary("view.zoomIn").as_deref(), Some("Cmd+]"));
+    assert!(restored.conflicts(Platform::Mac).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

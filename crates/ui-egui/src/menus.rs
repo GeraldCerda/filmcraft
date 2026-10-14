@@ -1069,7 +1069,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn custom_mac_keys_include_shifted_braces() {
+    fn custom_mac_keys_use_unshifted_brackets() {
         let app = FilmcraftApp::new(filmcraft_engine::Session::default());
         for (id, key) in [
             ("sequence.addEdit", "Cmd+E"),
@@ -1082,12 +1082,12 @@ mod tests {
             assert_eq!(app.session.shortcuts.primary(id).as_deref(), Some(key));
         }
         let bindings = bindings(&app);
-        for (id, keys) in
-            [("view.zoomOut", [egui::Key::OpenBracket, egui::Key::OpenCurlyBracket]), ("view.zoomIn", [egui::Key::CloseBracket, egui::Key::CloseCurlyBracket])]
-        {
-            for key in keys {
-                assert!(bindings.iter().any(|(m, k, command, panel)| m.command && m.shift && *k == key && command == id && panel.is_none()));
-            }
+        for (id, key) in [
+            ("view.zoomOut", egui::Key::OpenBracket),
+            ("view.zoomIn", egui::Key::CloseBracket),
+        ] {
+            assert!(bindings.iter().any(|(m, k, command, panel)| m.command && !m.shift && !m.alt && !m.ctrl && *k == key && command == id && panel.is_none()));
+            assert!(!bindings.iter().any(|(m, _, command, panel)| m.command && m.shift && command == id && panel.is_none()));
         }
     }
 

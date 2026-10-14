@@ -4,7 +4,7 @@ This customized fork is based on FilmCraft by the ArtCraft team.
 
 Sequence Settings: Vertical 9:16, Horizontal 16:9 and Square 1:1 presets. Match an empty sequence to its first imported video. Explicit orientation choices stay fixed. Imported video fills the sequence frame and crops when necessary. Frame size changes preserve motion and undo.
 
-Mac shortcuts: Command E slices at the playhead. Command C copies. Command X cuts. Command { zooms out. Command } zooms in. Command S saves. Command Z undoes. Command Shift R opens export settings.
+Mac shortcuts: Command E slices at the playhead. Command C copies. Command X cuts. Command [ zooms out. Command ] zooms in. Command S saves. Command Z undoes. Command Shift R opens the Export workspace.
 
 Every GUI export and queue addition requires choosing a destination. The source video folder is suggested. Cancellation writes nothing. Exporting over imported source media is blocked.
 

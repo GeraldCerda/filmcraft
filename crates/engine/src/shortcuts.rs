@@ -618,8 +618,8 @@ impl Shortcuts {
         let table: Vec<Entry> = match name {
             DEFAULT_PRESET => vec![
                 ("sequence.addEdit", "Cmd+E", ""),
-                ("view.zoomOut", "Cmd+Shift+[", ""),
-                ("view.zoomIn", "Cmd+Shift+]", ""),
+                ("view.zoomOut", "Cmd+[", ""),
+                ("view.zoomIn", "Cmd+]", ""),
                 ("mode.export", "Cmd+Shift+R", ""),
             ],
             PREMIERE_PRESET => presets::premiere(),
@@ -687,6 +687,28 @@ impl Shortcuts {
                 } else {
                     self.bindings = convert(f.bindings, f.platform);
                     self.modified = f.modified;
+                    if self.preset == DEFAULT_PRESET && self.modified {
+                        let mut migrated = false;
+                        for (command, old_keys, new_keys) in [
+                            ("view.zoomOut", "Cmd+Shift+[", "Cmd+["),
+                            ("view.zoomIn", "Cmd+Shift+]", "Cmd+]"),
+                        ] {
+                            let old = Binding::new(command, old_keys, None);
+                            let new = Binding::new(command, new_keys, None);
+                            if self.bindings.contains(&old)
+                                && !self.bindings.iter().any(|b| b.panel.is_none() && b.keys == new.keys && b.command != command)
+                            {
+                                self.bindings.retain(|b| b != &old);
+                                if !self.bindings.contains(&new) {
+                                    self.bindings.push(new);
+                                }
+                                migrated = true;
+                            }
+                        }
+                        if migrated {
+                            self.persist();
+                        }
+                    }
                 }
                 self.revision += 1;
             }
