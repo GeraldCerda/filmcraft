@@ -527,7 +527,7 @@ pub fn spawn_export(s: &mut Session, project: Arc<Project>, seq: ItemId, mut set
         let mut exporter = filmcraft_export::Exporter::new(project, seq, &settings, &prog).map_err(|e| EngineError::Other(e.to_string()))?;
         exporter.set_batch(1);
         s.jobs.push(job);
-        s.stepped.push(crate::SteppedJob { job: id, exporter, provider, progress: prog, result: res });
+        s.stepped.push(crate::SteppedJob { job: id, exporter, provider, progress: prog, result: res, sidecar });
         return Ok(id);
     }
     let run = move || {

@@ -425,7 +425,7 @@ enum AudioWriter {
 }
 
 struct StagedFile {
-    writer: std::io::BufWriter<std::fs::File>,
+    writer: Option<std::io::BufWriter<std::fs::File>>,
     temporary: std::path::PathBuf,
     target_state: Option<(u64, Option<std::time::SystemTime>)>,
 }
@@ -450,7 +450,7 @@ impl StagedFile {
             let temporary = target.with_file_name(name);
             match std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary) {
                 Ok(file) => {
-                    return Ok(Self { writer: std::io::BufWriter::new(file), temporary, target_state: state });
+                    return Ok(Self { writer: Some(std::io::BufWriter::new(file)), temporary, target_state: state });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(ExportError::Io(format!("{}: {error}", temporary.display()))),
@@ -460,8 +460,10 @@ impl StagedFile {
     }
 
     fn finish(mut self, path: &str) -> Result<u64> {
-        self.writer.flush().map_err(|error| ExportError::Io(error.to_string()))?;
-        self.writer.get_ref().sync_all().map_err(|error| ExportError::Io(error.to_string()))?;
+        let mut writer = self.writer.take().ok_or_else(|| ExportError::Io("output already closed".into()))?;
+        writer.flush().map_err(|error| ExportError::Io(error.to_string()))?;
+        writer.get_ref().sync_all().map_err(|error| ExportError::Io(error.to_string()))?;
+        drop(writer);
         let target = std::path::Path::new(path);
         let current = Self::state(target).map_err(|error| ExportError::Io(error.to_string()))?;
         if current != self.target_state {
@@ -474,6 +476,7 @@ impl StagedFile {
 
 impl Drop for StagedFile {
     fn drop(&mut self) {
+        drop(self.writer.take());
         let _ = std::fs::remove_file(&self.temporary);
     }
 }
@@ -513,7 +516,7 @@ fn write_output(settings: &ExportSettings, path: &str, data: Vec<u8>) -> Result<
         (sink.0)(path, data).map_err(|error| ExportError::Io(error.to_string()))?;
     } else {
         let mut file = StagedFile::new(path)?;
-        file.writer.write_all(&data).map_err(|error| ExportError::Io(error.to_string()))?;
+        file.writer.as_mut().ok_or_else(|| ExportError::Io("output already closed".into()))?.write_all(&data).map_err(|error| ExportError::Io(error.to_string()))?;
         file.finish(path)?;
     }
     Ok(n)
@@ -522,13 +525,13 @@ fn write_output(settings: &ExportSettings, path: &str, data: Vec<u8>) -> Result<
 impl Write for Out {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
-            Out::File(file) => file.writer.write(buf),
+            Out::File(file) => file.writer.as_mut().ok_or_else(|| std::io::Error::other("output already closed"))?.write(buf),
             Out::Mem(cursor) => cursor.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
-            Out::File(file) => file.writer.flush(),
+            Out::File(file) => file.writer.as_mut().ok_or_else(|| std::io::Error::other("output already closed"))?.flush(),
             Out::Mem(cursor) => cursor.flush(),
         }
     }
@@ -537,7 +540,7 @@ impl Write for Out {
 impl std::io::Seek for Out {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         match self {
-            Out::File(file) => file.writer.seek(pos),
+            Out::File(file) => file.writer.as_mut().ok_or_else(|| std::io::Error::other("output already closed"))?.seek(pos),
             Out::Mem(cursor) => cursor.seek(pos),
         }
     }
@@ -2057,13 +2060,13 @@ mod staged_file_tests {
         std::fs::write(&path, b"original").unwrap();
         {
             let mut output = StagedFile::new(path.to_str().unwrap()).unwrap();
-            output.writer.write_all(b"incomplete").unwrap();
+            output.writer.as_mut().unwrap().write_all(b"incomplete").unwrap();
         }
         assert_eq!(std::fs::read(&path).unwrap(), b"original");
         let entries = std::fs::read_dir(&dir).unwrap().count();
         assert_eq!(entries, 1);
         let mut output = StagedFile::new(path.to_str().unwrap()).unwrap();
-        output.writer.write_all(b"complete").unwrap();
+        output.writer.as_mut().unwrap().write_all(b"complete").unwrap();
         output.finish(path.to_str().unwrap()).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"complete");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -2076,7 +2079,7 @@ mod staged_file_tests {
         let path = dir.join("conflict.mov");
         std::fs::write(&path, b"old").unwrap();
         let mut output = StagedFile::new(path.to_str().unwrap()).unwrap();
-        output.writer.write_all(b"rendered").unwrap();
+        output.writer.as_mut().unwrap().write_all(b"rendered").unwrap();
         std::fs::write(&path, b"changed externally").unwrap();
         assert!(output.finish(path.to_str().unwrap()).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"changed externally");

@@ -456,6 +456,7 @@ pub struct SteppedJob {
     pub provider: media_pool::PoolProvider,
     pub progress: Arc<filmcraft_export::Progress>,
     pub result: Arc<std::sync::Mutex<Option<std::result::Result<filmcraft_export::Report, String>>>>,
+    pub sidecar: Option<(String, Vec<u8>)>,
 }
 
 /// A background job with shared progress.
@@ -547,12 +548,19 @@ impl Session {
     pub fn pump_jobs(&mut self, budget: std::time::Duration) -> bool {
         export_tools::pump_queue(self, false);
         let t0 = web_time::Instant::now();
+        let services = self.services.clone();
         while let Some(j) = self.stepped.first_mut() {
             match j.exporter.step(&j.provider, &j.progress) {
                 Ok(filmcraft_export::Step::Progress) => {}
                 Ok(filmcraft_export::Step::Pending) => return true,
                 Ok(filmcraft_export::Step::Done(r)) => {
-                    *j.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(Ok(r));
+                    let completed = j.sidecar.as_ref().map(|(path, bytes)| {
+                        services.write_file(path, bytes).map_err(|error| format!("{path}: {error}"))
+                    }).transpose().map(|_| r);
+                    if let Err(error) = &completed {
+                        *j.progress.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
+                    }
+                    *j.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(completed);
                     self.stepped.remove(0);
                 }
                 Err(e) => {
