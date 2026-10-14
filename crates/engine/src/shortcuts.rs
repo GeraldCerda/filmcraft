@@ -417,10 +417,7 @@ impl CommandInfo {
 
 fn reserve_timeline_zoom(bindings: &mut Vec<Binding>) -> bool {
     let before = bindings.clone();
-    for (command, old_key, reserved_key) in [
-        ("view.zoomOut", "Cmd+Shift+[", "Cmd+["),
-        ("view.zoomIn", "Cmd+Shift+]", "Cmd+]"),
-    ] {
+    for (command, old_key, reserved_key) in [("view.zoomOut", "Cmd+Shift+[", "Cmd+["), ("view.zoomIn", "Cmd+Shift+]", "Cmd+]")] {
         bindings.retain(|binding| {
             if binding.command == command && binding.panel.is_none() && binding.keys == old_key {
                 return false;
@@ -642,12 +639,9 @@ impl Shortcuts {
         let mut b = self.base_defaults();
         b.extend(self.audit_for(p));
         let table: Vec<Entry> = match name {
-            DEFAULT_PRESET => vec![
-                ("sequence.addEdit", "Cmd+E", ""),
-                ("view.zoomOut", "Cmd+[", ""),
-                ("view.zoomIn", "Cmd+]", ""),
-                ("mode.export", "Cmd+Shift+R", ""),
-            ],
+            DEFAULT_PRESET => {
+                vec![("sequence.addEdit", "Cmd+E", ""), ("view.zoomOut", "Cmd+[", ""), ("view.zoomIn", "Cmd+]", ""), ("mode.export", "Cmd+Shift+R", "")]
+            }
             PREMIERE_PRESET => presets::premiere(),
             FCP_PRESET => presets::FINAL_CUT.to_vec(),
             AVID_PRESET => presets::AVID.to_vec(),
