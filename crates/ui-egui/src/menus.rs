@@ -1089,6 +1089,10 @@ mod tests {
             assert!(bindings.iter().any(|(m, k, command, panel)| m.command && !m.shift && !m.alt && !m.ctrl && *k == key && command == id && panel.is_none()));
             assert!(!bindings.iter().any(|(m, _, command, panel)| m.command && m.shift && command == id && panel.is_none()));
         }
+        for id in ["graphics.sendBackward", "graphics.bringForward"] {
+            assert!(!bindings.iter().any(|(_, _, command, _)| command == id));
+            assert!(menu_items(&app).iter().find(|item| item.id == id).is_some_and(|item| item.shortcut.is_none()));
+        }
     }
 
     /// What `cargo xtask parity` measures: every item sits under a top-level menu, and Window ▸

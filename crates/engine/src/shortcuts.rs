@@ -415,6 +415,28 @@ impl CommandInfo {
     }
 }
 
+fn reserve_timeline_zoom(bindings: &mut Vec<Binding>) -> bool {
+    let before = bindings.clone();
+    for (command, old_key, reserved_key) in [
+        ("view.zoomOut", "Cmd+Shift+[", "Cmd+["),
+        ("view.zoomIn", "Cmd+Shift+]", "Cmd+]"),
+    ] {
+        bindings.retain(|binding| {
+            if binding.command == command && binding.panel.is_none() && binding.keys == old_key {
+                return false;
+            }
+            if binding.keys == reserved_key {
+                return binding.panel.is_none() && binding.command == command;
+            }
+            true
+        });
+        if !bindings.iter().any(|b| b.command == command && b.keys == reserved_key && b.panel.is_none()) {
+            bindings.push(Binding::new(command, reserved_key, None));
+        }
+    }
+    *bindings != before
+}
+
 fn category_of(id: &str, menu: &[&str]) -> String {
     let prefix = id.split('.').next().unwrap_or("");
     match prefix {
@@ -560,6 +582,10 @@ impl Shortcuts {
             self.bindings = b;
             self.revision += 1;
         }
+        if reserve_timeline_zoom(&mut self.bindings) {
+            self.revision += 1;
+            self.persist();
+        }
     }
 
     // ---------------------------------------------------------------- presets
@@ -628,6 +654,7 @@ impl Shortcuts {
             _ => return None,
         };
         self.apply_table(&mut b, &table);
+        reserve_timeline_zoom(&mut b);
         drop_control_collisions(&mut b, p);
         Some(b)
     }
@@ -687,28 +714,12 @@ impl Shortcuts {
                 } else {
                     self.bindings = convert(f.bindings, f.platform);
                     self.modified = f.modified;
-                    if self.preset == DEFAULT_PRESET && self.modified {
-                        let mut migrated = false;
-                        for (command, old_keys, new_keys) in [
-                            ("view.zoomOut", "Cmd+Shift+[", "Cmd+["),
-                            ("view.zoomIn", "Cmd+Shift+]", "Cmd+]"),
-                        ] {
-                            let old = Binding::new(command, old_keys, None);
-                            let new = Binding::new(command, new_keys, None);
-                            if self.bindings.contains(&old)
-                                && !self.bindings.iter().any(|b| b.panel.is_none() && b.keys == new.keys && b.command != command)
-                            {
-                                self.bindings.retain(|b| b != &old);
-                                if !self.bindings.contains(&new) {
-                                    self.bindings.push(new);
-                                }
-                                migrated = true;
-                            }
-                        }
-                        if migrated {
-                            self.persist();
-                        }
+                }
+                if reserve_timeline_zoom(&mut self.bindings) {
+                    if !BUILTIN_PRESETS.contains(&self.preset.as_str()) {
+                        self.modified = true;
                     }
+                    self.persist();
                 }
                 self.revision += 1;
             }
@@ -870,7 +881,7 @@ impl Shortcuts {
     }
 
     pub fn load_preset(&mut self, name: &str) -> std::result::Result<(), String> {
-        let bindings = match self.builtin(name) {
+        let mut bindings = match self.builtin(name) {
             Some(b) => b,
             None => {
                 let path = self.preset_path(name).ok_or("no data directory for custom presets")?;
@@ -878,10 +889,11 @@ impl Shortcuts {
                 convert(f.bindings, f.platform)
             }
         };
+        let adjusted = reserve_timeline_zoom(&mut bindings);
         let before = self.snapshot();
         self.bindings = bindings;
         self.preset = name.into();
-        self.modified = false;
+        self.modified = adjusted && !BUILTIN_PRESETS.contains(&name);
         self.changed(before);
         Ok(())
     }
@@ -930,7 +942,8 @@ impl Shortcuts {
         } else {
             f.name.clone()
         };
-        let bindings: Vec<Binding> = convert(f.bindings, f.platform).into_iter().filter(|b| self.known(&b.command)).collect();
+        let mut bindings: Vec<Binding> = convert(f.bindings, f.platform).into_iter().filter(|b| self.known(&b.command)).collect();
+        reserve_timeline_zoom(&mut bindings);
         if let Some(p) = self.preset_path(&name) {
             let file = PresetFile { format: FILE_FORMAT.into(), version: 1, name: name.clone(), platform: None, modified: false, bindings: bindings.clone() };
             write_file(&p, &file)?;

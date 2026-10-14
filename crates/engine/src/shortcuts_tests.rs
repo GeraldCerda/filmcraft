@@ -54,6 +54,8 @@ fn defaults_follow_the_registry_and_the_premiere_audit() {
     assert_eq!(sc.primary("sequence.addEdit").as_deref(), Some("Cmd+E"));
     assert_eq!(sc.primary("view.zoomOut").as_deref(), Some("Cmd+["));
     assert_eq!(sc.primary("view.zoomIn").as_deref(), Some("Cmd+]"));
+    assert_eq!(sc.resolve(&Chord::parse("Cmd+[").unwrap(), Some("Timeline"), Platform::Mac).unwrap().command, "view.zoomOut");
+    assert_eq!(sc.resolve(&Chord::parse("Cmd+]").unwrap(), Some("Timeline"), Platform::Mac).unwrap().command, "view.zoomIn");
     assert_eq!(sc.primary("edit.copy").as_deref(), Some("Cmd+C"));
     assert_eq!(sc.primary("edit.cut").as_deref(), Some("Cmd+X"));
     assert_eq!(sc.primary("file.save").as_deref(), Some("Cmd+S"));
@@ -264,7 +266,7 @@ fn modified_default_migrates_old_zoom_keys_without_changing_other_shortcuts() {
 }
 
 #[test]
-fn default_zoom_migration_preserves_conflicting_custom_shortcuts() {
+fn default_zoom_migration_replaces_conflicting_shortcuts() {
     let dir = temp_dir("default-zoom-collision");
     let mut original = Shortcuts::new();
     original.register_external(vec![
@@ -278,10 +280,45 @@ fn default_zoom_migration_preserves_conflicting_custom_shortcuts() {
 
     let mut restored = Shortcuts::new();
     restored.set_dir(&dir);
-    assert_eq!(restored.primary("edit.copy").as_deref(), Some("Cmd+["));
-    assert_eq!(restored.primary("view.zoomOut").as_deref(), Some("Cmd+Shift+["));
+    assert!(restored.primary("edit.copy").is_none());
+    assert_eq!(restored.primary("view.zoomOut").as_deref(), Some("Cmd+["));
     assert_eq!(restored.primary("view.zoomIn").as_deref(), Some("Cmd+]"));
+    let out = Chord::parse("Cmd+[").unwrap();
+    assert_eq!(restored.resolve(&out, Some("Timeline"), Platform::Mac).unwrap().command, "view.zoomOut");
     assert!(restored.conflicts(Platform::Mac).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn legacy_graphics_shortcuts_are_replaced_without_resetting_other_settings() {
+    let dir = temp_dir("graphics-zoom-conflict");
+    let mut original = Shortcuts::new();
+    original.register_external(vec![
+        CommandInfo::new("view.zoomIn", "Zoom In", &["View"], Some("=")),
+        CommandInfo::new("view.zoomOut", "Zoom Out", &["View"], Some("-")),
+        CommandInfo::new("graphics.sendBackward", "Send Backward", &["Graphics"], None),
+        CommandInfo::new("graphics.bringForward", "Bring Forward", &["Graphics"], None),
+    ]);
+    original.set_dir(&dir);
+    original.set("edit.undo", "Cmd+Alt+Z", None, false, false).unwrap();
+    original.set("view.zoomOut", "Cmd+Shift+[", None, false, false).unwrap();
+    original.set("view.zoomIn", "Cmd+Shift+]", None, false, false).unwrap();
+    original.set("graphics.sendBackward", "Cmd+[", None, false, false).unwrap();
+    original.set("graphics.bringForward", "Cmd+]", None, false, false).unwrap();
+
+    let mut restored = Shortcuts::new();
+    restored.set_dir(&dir);
+    assert_eq!(restored.primary("view.zoomOut").as_deref(), Some("Cmd+["));
+    assert_eq!(restored.primary("view.zoomIn").as_deref(), Some("Cmd+]"));
+    assert!(restored.primary("graphics.sendBackward").is_none());
+    assert!(restored.primary("graphics.bringForward").is_none());
+    assert_eq!(restored.primary("edit.undo").as_deref(), Some("Cmd+Alt+Z"));
+    assert_eq!(restored.resolve(&Chord::parse("Cmd+[").unwrap(), Some("Timeline"), Platform::Mac).unwrap().command, "view.zoomOut");
+    assert_eq!(restored.resolve(&Chord::parse("Cmd+]").unwrap(), Some("Timeline"), Platform::Mac).unwrap().command, "view.zoomIn");
+
+    let mut restarted = Shortcuts::new();
+    restarted.set_dir(&dir);
+    assert_eq!(restarted.bindings, restored.bindings);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -324,7 +361,9 @@ fn custom_presets_persist_export_and_import() {
     assert_eq!(r["name"], json!("From Windows"));
     assert_eq!(s.shortcuts.primary("edit.undo").as_deref(), Some("Cmd+Z"));
     assert_eq!(s.shortcuts.primary("sequence.addEdit").as_deref(), Some("Cmd+Alt+K"));
-    assert_eq!(s.shortcuts.bindings.len(), 2, "unknown commands dropped");
+    assert_eq!(s.shortcuts.bindings.len(), 4, "unknown commands dropped and timeline zoom retained");
+    assert_eq!(s.shortcuts.primary("view.zoomOut").as_deref(), Some("Cmd+["));
+    assert_eq!(s.shortcuts.primary("view.zoomIn").as_deref(), Some("Cmd+]"));
     s.execute("shortcuts.deletePreset", json!({"name": "My Keys"})).unwrap();
     assert!(s.execute("shortcuts.deletePreset", json!({"name": "FilmCraft Default"})).is_err());
     assert_eq!(s.execute("shortcuts.presets", json!({})).unwrap()["custom"], json!(["From Windows"]));

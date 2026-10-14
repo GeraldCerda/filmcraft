@@ -197,8 +197,6 @@ pub const PREMIERE: &[Entry] = &[
     ("graphics.newRectangle", "Cmd+Alt+R", ""),
     ("graphics.newEllipse", "Cmd+Alt+E", ""),
     ("graphics.bringToFront", "Cmd+Shift+]", ""),
-    ("graphics.bringForward", "Cmd+]", ""),
-    ("graphics.sendBackward", "Cmd+[", ""),
     ("graphics.sendToBack", "Cmd+Shift+[", ""),
     ("graphics.selectNextLayer", "Cmd+Alt+]", ""),
     ("graphics.selectPreviousLayer", "Cmd+Alt+[", ""),
