@@ -61,6 +61,8 @@ fn defaults_follow_the_registry_and_the_premiere_audit() {
     assert_eq!(sc.primary("file.save").as_deref(), Some("Cmd+S"));
     assert_eq!(sc.primary("edit.undo").as_deref(), Some("Cmd+Z"));
     assert_eq!(sc.primary("mode.export").as_deref(), Some("Cmd+Shift+R"));
+    assert_eq!(crate::graphics::commands().into_iter().find(|c| c.id == "graphics.sendBackward").unwrap().shortcut, None);
+    assert_eq!(crate::graphics::commands().into_iter().find(|c| c.id == "graphics.bringForward").unwrap().shortcut, None);
     assert_eq!(sc.primary("playback.toggle").as_deref(), Some("Space"));
     // the audit adopts Premiere defaults for commands that had none
     let audit = sc.audit();

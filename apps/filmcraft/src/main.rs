@@ -186,6 +186,27 @@ fn native_options(agent: bool) -> eframe::NativeOptions {
 
 /// Creates the app once eframe has its window and graphics device; sets `created` when it runs,
 /// and confirms the graphics mode once two frames have painted.
+fn apply_cache_choice(session: &mut Session, choice: Option<std::path::PathBuf>, setup_version: &str) -> bool {
+    if let Some(folder) = choice {
+        let cache = folder.join("FilmCraft Cache");
+        match std::fs::create_dir_all(&cache) {
+            Ok(()) => {
+                session.prefs.media_cache.location = cache.to_string_lossy().into_owned();
+                session.prefs.media_cache.database_location = session.prefs.media_cache.location.clone();
+                session.prefs.media_cache.save_next_to_media = false;
+                session.prefs.media_cache.setup_version = setup_version.into();
+                session.apply_media_cache();
+                return true;
+            }
+            Err(error) => log::warn!("could not create FilmCraft cache in {}: {error}", folder.display()),
+        }
+    }
+    session.prefs.media_cache.location.clear();
+    session.prefs.media_cache.database_location.clear();
+    session.apply_media_cache();
+    false
+}
+
 fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<AtomicBool>) -> eframe::AppCreator<'static> {
     let Launch { control_port, control_input_only, files, demo, startup_flag, recover, data_dir, graphics: _ } = launch;
     Box::new(move |cc| {
@@ -215,17 +236,12 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
         let setup_version = format!("{}-custom-sequence-1", env!("CARGO_PKG_VERSION"));
         let setup_needed = !control_input_only
             && (session.prefs.media_cache.setup_version != setup_version || !std::path::Path::new(&session.prefs.media_cache.location).is_dir());
-        if setup_needed {
-            let Some(folder) = rfd::FileDialog::new().set_title("Choose where FilmCraft stores cache files").pick_folder() else {
-                return Err("Cache setup cancelled. Choose a cache folder when you next open FilmCraft.".into());
-            };
-            let cache = folder.join("FilmCraft Cache");
-            std::fs::create_dir_all(&cache)?;
-            session.prefs.media_cache.location = cache.to_string_lossy().into_owned();
-            session.prefs.media_cache.database_location = session.prefs.media_cache.location.clone();
-            session.prefs.media_cache.save_next_to_media = false;
-            session.apply_media_cache();
-        }
+        let cache_configured = if setup_needed {
+            let choice = rfd::FileDialog::new().set_title("Choose where FilmCraft stores cache files").pick_folder();
+            apply_cache_choice(&mut session, choice, &setup_version)
+        } else {
+            false
+        };
         // voice-over recording reads the microphone through cpal
         session.voiceover.input = Some(Box::new(audio_in::CpalIn::new(&session.prefs.audio_hardware.device_class)));
         let (project, media) = args::project_and_media(&files);
@@ -261,20 +277,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             }
         }
         let mut app = FilmcraftApp::new(session);
-        if setup_needed {
-            for (command, keys) in [
-                ("sequence.addEdit", "Cmd+E"),
-                ("edit.copy", "Cmd+C"),
-                ("edit.cut", "Cmd+X"),
-                ("view.zoomOut", "Cmd+Shift+["),
-                ("view.zoomIn", "Cmd+Shift+]"),
-                ("file.save", "Cmd+S"),
-                ("edit.undo", "Cmd+Z"),
-                ("mode.export", "Cmd+Shift+R"),
-            ] {
-                app.session.shortcuts.set(command, keys, None, false, false)?;
-            }
-            app.session.prefs.media_cache.setup_version = setup_version;
+        if cache_configured {
             if let Some(path) = &app.session.prefs_path {
                 app.session.prefs.save(path)?;
             }
@@ -546,6 +549,25 @@ fn project_patterns() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::Session;
+
+    #[test]
+    fn cancelling_cache_choice_keeps_startup_usable_and_shortcuts_intact() {
+        let mut session = Session::default();
+        let before = session.shortcuts.bindings.clone();
+        session.prefs.media_cache.location = "/offline-volume/FilmCraft Cache".into();
+        assert!(!super::apply_cache_choice(&mut session, None, "custom-version"));
+        assert!(session.prefs.media_cache.location.is_empty());
+        assert!(session.prefs.media_cache.setup_version.is_empty());
+        assert_eq!(session.shortcuts.bindings, before);
+        let dir = std::env::temp_dir().join(format!("filmcraft-cache-startup-{}", std::process::id()));
+        assert!(super::apply_cache_choice(&mut session, Some(dir.clone()), "custom-version"));
+        assert_eq!(session.prefs.media_cache.setup_version, "custom-version");
+        assert_eq!(session.prefs.media_cache.location, dir.join("FilmCraft Cache").to_string_lossy());
+        assert_eq!(session.shortcuts.bindings, before);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Start-up registers the hardware decoders whether or not anything is logged (no logger is
     /// installed here, as in a normal run).
     #[test]

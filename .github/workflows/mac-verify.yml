@@ -1,0 +1,33 @@
+name: FilmCraft macOS verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: filmcraft-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install Rust 1.95
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.95.0
+      - name: Format verification
+        run: cargo fmt --all -- --check
+      - name: Core regression tests
+        run: cargo test --locked -p filmcraft-engine -p filmcraft-ui-egui -p filmcraft-edit -p filmcraft-export -p filmcraft
+      - name: Desktop compilation verification
+        run: cargo check --locked -p filmcraft
+      - name: Installer shell syntax
+        run: bash -n packaging/macos/install-custom.sh

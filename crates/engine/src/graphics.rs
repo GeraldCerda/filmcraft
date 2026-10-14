@@ -887,8 +887,12 @@ fn menu_commands() -> Vec<CommandSpec> {
             distribute_layers(s, p, false, true)
         }),
         arrange_cmd!("graphics.bringToFront", "Bring to Front", "Cmd+Shift+]", "front"),
-        arrange_cmd!("graphics.bringForward", "Bring Forward", "Cmd+]", "forward"),
-        arrange_cmd!("graphics.sendBackward", "Send Backward", "Cmd+[", "backward"),
+        spec("graphics.bringForward", "Bring Forward", &["Graphics and Titles", "Arrange"], None, r#"{"clip":id?,"layer":n?}"#, has_graphic, |s, p| {
+            arrange_layer(s, p, json!("forward"))
+        }),
+        spec("graphics.sendBackward", "Send Backward", &["Graphics and Titles", "Arrange"], None, r#"{"clip":id?,"layer":n?}"#, has_graphic, |s, p| {
+            arrange_layer(s, p, json!("backward"))
+        }),
         arrange_cmd!("graphics.sendToBack", "Send to Back", "Cmd+Shift+[", "back"),
         spec("graphics.selectNextGraphic", "Select Next Graphic", SEL, None, "{}", has_graphics_in_seq, |s, _| select_graphic(s, true)),
         spec("graphics.selectPreviousGraphic", "Select Previous Graphic", SEL, None, "{}", has_graphics_in_seq, |s, _| select_graphic(s, false)),
