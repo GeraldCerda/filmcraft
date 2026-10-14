@@ -516,7 +516,11 @@ fn write_output(settings: &ExportSettings, path: &str, data: Vec<u8>) -> Result<
         (sink.0)(path, data).map_err(|error| ExportError::Io(error.to_string()))?;
     } else {
         let mut file = StagedFile::new(path)?;
-        file.writer.as_mut().ok_or_else(|| ExportError::Io("output already closed".into()))?.write_all(&data).map_err(|error| ExportError::Io(error.to_string()))?;
+        file.writer
+            .as_mut()
+            .ok_or_else(|| ExportError::Io("output already closed".into()))?
+            .write_all(&data)
+            .map_err(|error| ExportError::Io(error.to_string()))?;
         file.finish(path)?;
     }
     Ok(n)

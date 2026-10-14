@@ -409,7 +409,8 @@ fn arrange_select_and_reset() {
     // menu shortcuts
     let spec = |id: &str| crate::command_specs().iter().find(|c| c.id == id).unwrap();
     assert_eq!(spec("graphics.bringToFront").shortcut, Some("Cmd+Shift+]"));
-    assert_eq!(spec("graphics.sendBackward").shortcut, Some("Cmd+["));
+    assert_eq!(spec("graphics.sendBackward").shortcut, None);
+    assert_eq!(spec("graphics.bringForward").shortcut, None);
     // select next / previous layer cycles
     s.execute("graphics.selectNextLayer", json!({})).unwrap();
     assert_eq!(s.state.graphic_layers, vec![2]);

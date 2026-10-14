@@ -554,9 +554,12 @@ impl Session {
                 Ok(filmcraft_export::Step::Progress) => {}
                 Ok(filmcraft_export::Step::Pending) => return true,
                 Ok(filmcraft_export::Step::Done(r)) => {
-                    let completed = j.sidecar.as_ref().map(|(path, bytes)| {
-                        services.write_file(path, bytes).map_err(|error| format!("{path}: {error}"))
-                    }).transpose().map(|_| r);
+                    let completed = j
+                        .sidecar
+                        .as_ref()
+                        .map(|(path, bytes)| services.write_file(path, bytes).map_err(|error| format!("{path}: {error}")))
+                        .transpose()
+                        .map(|_| r);
                     if let Err(error) = &completed {
                         *j.progress.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
                     }
