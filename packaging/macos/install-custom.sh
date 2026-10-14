@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -euo pipefail
 if [ "$(uname -s)" != Darwin ]; then
     printf 'Run this installer on your Mac.\n' >&2
@@ -38,7 +39,7 @@ cd "$source_dir"
 CARGO_TARGET_DIR="$build_dir" cargo +1.95.0 build --locked --release -p filmcraft
 if /usr/bin/pgrep -x "$executable" >/dev/null 2>&1; then
     printf 'Save your work and quit FilmCraft, then press Return.\n'
-    read -r response
+    read -r
     if /usr/bin/pgrep -x "$executable" >/dev/null 2>&1; then
         printf 'FilmCraft is still running. Quit it before installing.\n' >&2
         exit 1
