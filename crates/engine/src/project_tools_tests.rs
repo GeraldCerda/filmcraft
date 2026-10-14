@@ -91,7 +91,8 @@ fn file_edit_clip_menu_order_and_shortcuts_match_premiere() {
     // the default shortcut set binds them (no conflicts with existing keys)
     let s = Session::default();
     assert_eq!(s.shortcuts.primary("edit.find").as_deref(), Some("Cmd+F"));
-    assert_eq!(s.shortcuts.primary("edit.editOriginal").as_deref(), Some("Cmd+E"));
+    assert_eq!(s.shortcuts.primary("sequence.addEdit").as_deref(), Some("Cmd+E"));
+    assert_eq!(s.shortcuts.primary("edit.editOriginal"), None);
 }
 
 #[test]

@@ -964,7 +964,14 @@ pub fn scratch_paths(s: &Session) -> Value {
 /// Render previews folder of the open project: Scratch Disks ▸ Video Previews / `<project
 /// name>`, else `FilmCraft Previews/<project name>` next to the project (None while unsaved).
 pub fn previews_dir(s: &Session) -> Option<std::path::PathBuf> {
-    s.path.as_deref().map(|p| previews_dir_for(&s.project, p))
+    s.path.as_deref().map(|p| {
+        if !s.prefs.media_cache.setup_version.is_empty() && !s.prefs.media_cache.location.is_empty() {
+            let hash = p.bytes().fold(0xcbf29ce484222325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100000001b3));
+            let stem: String = std::path::Path::new(p).file_stem().map(|x| x.to_string_lossy().chars().take(20).collect()).unwrap_or_else(|| "Untitled".into());
+            return std::path::Path::new(&s.prefs.media_cache.location).join("Previews").join(format!("{stem}-{hash:016x}"));
+        }
+        previews_dir_for(&s.project, p)
+    })
 }
 
 /// [`previews_dir`] for `project` saved at `path`.

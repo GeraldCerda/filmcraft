@@ -813,6 +813,8 @@ pub fn parse_shortcut(s: &str) -> Option<(egui::Modifiers, egui::Key)> {
             "Ctrl" => m.ctrl = true,
             k => {
                 key = match k {
+                    "[" => Some(egui::Key::OpenBracket),
+                    "]" => Some(egui::Key::CloseBracket),
                     ";" => Some(egui::Key::Semicolon),
                     "'" => Some(egui::Key::Quote),
                     "," => Some(egui::Key::Comma),
@@ -1065,6 +1067,29 @@ mod parse_shortcut_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_mac_keys_include_shifted_braces() {
+        let app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        for (id, key) in [
+            ("sequence.addEdit", "Cmd+E"),
+            ("edit.copy", "Cmd+C"),
+            ("edit.cut", "Cmd+X"),
+            ("file.save", "Cmd+S"),
+            ("edit.undo", "Cmd+Z"),
+            ("mode.export", "Cmd+Shift+R"),
+        ] {
+            assert_eq!(app.session.shortcuts.primary(id).as_deref(), Some(key));
+        }
+        let bindings = bindings(&app);
+        for (id, keys) in
+            [("view.zoomOut", [egui::Key::OpenBracket, egui::Key::OpenCurlyBracket]), ("view.zoomIn", [egui::Key::CloseBracket, egui::Key::CloseCurlyBracket])]
+        {
+            for key in keys {
+                assert!(bindings.iter().any(|(m, k, command, panel)| m.command && m.shift && *k == key && command == id && panel.is_none()));
+            }
+        }
+    }
 
     /// What `cargo xtask parity` measures: every item sits under a top-level menu, and Window ▸
     /// Workspaces lists the built-in workspaces before the layout commands, none checked.

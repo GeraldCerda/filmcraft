@@ -212,6 +212,20 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
                 log::warn!("auto-save and crash recovery unavailable: {e}");
             }
         }
+        let setup_version = format!("{}-custom-sequence-1", env!("CARGO_PKG_VERSION"));
+        let setup_needed = !control_input_only
+            && (session.prefs.media_cache.setup_version != setup_version || !std::path::Path::new(&session.prefs.media_cache.location).is_dir());
+        if setup_needed {
+            let Some(folder) = rfd::FileDialog::new().set_title("Choose where FilmCraft stores cache files").pick_folder() else {
+                return Err("Cache setup cancelled. Choose a cache folder when you next open FilmCraft.".into());
+            };
+            let cache = folder.join("FilmCraft Cache");
+            std::fs::create_dir_all(&cache)?;
+            session.prefs.media_cache.location = cache.to_string_lossy().into_owned();
+            session.prefs.media_cache.database_location = session.prefs.media_cache.location.clone();
+            session.prefs.media_cache.save_next_to_media = false;
+            session.apply_media_cache();
+        }
         // voice-over recording reads the microphone through cpal
         session.voiceover.input = Some(Box::new(audio_in::CpalIn::new(&session.prefs.audio_hardware.device_class)));
         let (project, media) = args::project_and_media(&files);
@@ -247,6 +261,24 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             }
         }
         let mut app = FilmcraftApp::new(session);
+        if setup_needed {
+            for (command, keys) in [
+                ("sequence.addEdit", "Cmd+E"),
+                ("edit.copy", "Cmd+C"),
+                ("edit.cut", "Cmd+X"),
+                ("view.zoomOut", "Cmd+Shift+["),
+                ("view.zoomIn", "Cmd+Shift+]"),
+                ("file.save", "Cmd+S"),
+                ("edit.undo", "Cmd+Z"),
+                ("mode.export", "Cmd+Shift+R"),
+            ] {
+                app.session.shortcuts.set(command, keys, None, false, false)?;
+            }
+            app.session.prefs.media_cache.setup_version = setup_version;
+            if let Some(path) = &app.session.prefs_path {
+                app.session.prefs.save(path)?;
+            }
+        }
         app.graphics_notice = notice;
         if recover == Some(false) {
             app.dialog = None;

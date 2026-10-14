@@ -30,7 +30,7 @@ fn coverage(s: &Session, xs: &[usize]) -> Vec<f32> {
 
 /// A 192 x 108 square-pixel sequence (a 1920 x 1080 stand-in) with `item` overwritten at 0.
 fn overwrite_into_square_hd(s: &mut Session, item: ItemId) -> filmcraft_project::ClipId {
-    s.execute("file.newSequence", json!({"name": "HD", "width": 192, "height": 108, "fps": 24})).unwrap();
+    s.execute("file.newSequence", json!({"name": "HD", "width": 192, "height": 108, "fps": 24, "fillFrame": false})).unwrap();
     s.execute("source.open", json!({"item": item.0})).unwrap();
     s.execute("playhead.set", json!({"seconds": 0.0})).unwrap();
     let r = s.execute("source.overwrite", json!({})).unwrap();
@@ -99,14 +99,14 @@ fn default_media_scaling_uses_the_display_size() {
     let clip = overwrite_into_square_hd(&mut s, item);
     assert_eq!(motion_scale(&s, clip), 100.0);
     // in a 96 x 108 frame it is halved (display 192 wide), not scaled to 96 / 144
-    s.execute("file.newSequence", json!({"name": "Narrow", "width": 96, "height": 108, "fps": 24})).unwrap();
+    s.execute("file.newSequence", json!({"name": "Narrow", "width": 96, "height": 108, "fps": 24, "fillFrame": false})).unwrap();
     s.execute("source.open", json!({"item": item.0})).unwrap();
     let r = s.execute("source.overwrite", json!({})).unwrap();
     let clip = filmcraft_project::ClipId(r["clips"][0].as_u64().unwrap());
     assert_eq!(motion_scale(&s, clip), 50.0);
     // Scale to Frame Size: the renderer fits the display size
     s.prefs.media.default_media_scaling = "scaleToFrameSize".into();
-    s.execute("file.newSequence", json!({"name": "Wide", "width": 384, "height": 108, "fps": 24})).unwrap();
+    s.execute("file.newSequence", json!({"name": "Wide", "width": 384, "height": 108, "fps": 24, "fillFrame": false})).unwrap();
     s.execute("source.open", json!({"item": item.0})).unwrap();
     s.execute("playhead.set", json!({"seconds": 0.0})).unwrap();
     s.execute("source.overwrite", json!({})).unwrap();
@@ -227,5 +227,24 @@ fn ffmpeg_anamorphic_files_fill_a_square_frame_and_make_anamorphic_sequences() {
         // testsrc2 is opaque everywhere: covered edge to edge
         let c = coverage(&s, &[1, 10, 181, 190]);
         assert!(c.iter().all(|a| *a > 0.99), "{}: {c:?}", file.display());
+    }
+}
+
+#[test]
+fn orientation_changes_normalize_pixel_aspect_and_keep_picture_filled() {
+    let mut s = Session::default();
+    let item = matte(&mut s, (4, 3));
+    s.execute("file.newSequence", json!({"fromItem":item.0})).unwrap();
+    s.execute("sequence.settings", json!({"width":108,"height":192,"par":[1,1],"scaleMotion":true,"fillFrame":true})).unwrap();
+    assert_eq!(s.active_sequence().unwrap().settings.par, (1, 1));
+    s.execute("playhead.set", json!({"seconds":0.5})).unwrap();
+    let frame = s.render_program(1.0).unwrap();
+    for (x, y) in [(0, 0), (107, 0), (0, 191), (107, 191)] {
+        assert!(frame.get(x, y)[3] > 0.99);
+    }
+    for par in [json!([0, 1]), json!([1, 0]), json!([1]), json!([1, 1, 1]), json!([-1, 1]), json!([999999999999u64, 1]), json!("1:1")] {
+        let before = (*s.project).clone();
+        assert!(s.execute("sequence.settings", json!({"par":par})).is_err());
+        assert_eq!(*s.project, before);
     }
 }

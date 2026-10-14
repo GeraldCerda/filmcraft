@@ -836,6 +836,10 @@ impl Track {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SequenceSettings {
+    #[serde(default)]
+    pub match_first_video: bool,
+    #[serde(default = "default_fill_frame")]
+    pub fill_frame: bool,
     pub width: u32,
     pub height: u32,
     pub frame_rate: FrameRate,
@@ -857,6 +861,10 @@ pub struct SequenceSettings {
     pub color: filmcraft_color::ColorPipeline,
 }
 
+fn default_fill_frame() -> bool {
+    true
+}
+
 fn default_color_pipeline() -> filmcraft_color::ColorPipeline {
     filmcraft_color::ColorPipeline::REC709
 }
@@ -864,6 +872,8 @@ fn default_color_pipeline() -> filmcraft_color::ColorPipeline {
 impl Default for SequenceSettings {
     fn default() -> Self {
         Self {
+            match_first_video: true,
+            fill_frame: true,
             width: 1920,
             height: 1080,
             frame_rate: FrameRate::FPS_23_976,

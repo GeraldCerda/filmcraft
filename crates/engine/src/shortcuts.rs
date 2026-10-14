@@ -616,7 +616,12 @@ impl Shortcuts {
         let mut b = self.base_defaults();
         b.extend(self.audit_for(p));
         let table: Vec<Entry> = match name {
-            DEFAULT_PRESET => Vec::new(),
+            DEFAULT_PRESET => vec![
+                ("sequence.addEdit", "Cmd+E", ""),
+                ("view.zoomOut", "Cmd+Shift+[", ""),
+                ("view.zoomIn", "Cmd+Shift+]", ""),
+                ("mode.export", "Cmd+Shift+R", ""),
+            ],
             PREMIERE_PRESET => presets::premiere(),
             FCP_PRESET => presets::FINAL_CUT.to_vec(),
             AVID_PRESET => presets::AVID.to_vec(),

@@ -84,6 +84,9 @@ pub fn open(app: &mut FilmcraftApp) {
         width: st.width,
         height: st.height,
         scale_motion: true,
+        square_pixels: false,
+        match_first_video: st.match_first_video,
+        fill_frame: st.fill_frame,
         drop_frame: st.drop_frame && st.frame_rate.supports_drop_frame(),
         mix: mix_name(st.audio_master).into(),
         sample_rate: st.sample_rate,
@@ -110,6 +113,9 @@ pub fn open_new(app: &mut FilmcraftApp) {
         width: st.width,
         height: st.height,
         scale_motion: true,
+        square_pixels: false,
+        match_first_video: st.match_first_video,
+        fill_frame: st.fill_frame,
         drop_frame: st.drop_frame && st.frame_rate.supports_drop_frame(),
         mix: mix_name(st.audio_master).into(),
         sample_rate: st.sample_rate,
@@ -131,6 +137,8 @@ fn new_sequence_params(d: &SequenceSettingsDraft) -> (Map<String, Value>, Map<St
     if !name.is_empty() {
         p.insert("name".into(), json!(name));
     }
+    p.insert("matchFirstVideo".into(), json!(d.match_first_video));
+    p.insert("fillFrame".into(), json!(d.fill_frame));
     p.insert("width".into(), json!(d.width));
     p.insert("height".into(), json!(d.height));
     p.insert("fps".into(), json!(rate(d).as_f64()));
@@ -139,7 +147,15 @@ fn new_sequence_params(d: &SequenceSettingsDraft) -> (Map<String, Value>, Map<St
     p.insert("video".into(), json!(d.video_tracks.min(256)));
     p.insert("audio".into(), json!(d.audio_tracks.min(256)));
     // what's left: only the settings `file.newSequence` has no parameter for
-    let after = SequenceSettings { frame_rate: rate(d), width: d.width, height: d.height, sample_rate: d.sample_rate, ..Default::default() };
+    let after = SequenceSettings {
+        match_first_video: d.match_first_video,
+        fill_frame: d.fill_frame,
+        frame_rate: rate(d),
+        width: d.width,
+        height: d.height,
+        sample_rate: d.sample_rate,
+        ..Default::default()
+    };
     let mut rest = changes(d, &after, name);
     rest.retain(|k, _| matches!(k.as_str(), "dropFrame" | "maxRenderQuality"));
     (p, rest)
@@ -218,6 +234,16 @@ fn changes(d: &SequenceSettingsDraft, cur: &SequenceSettings, cur_name: &str) ->
     let name = d.name.trim();
     if !name.is_empty() && name != cur_name {
         p.insert("name".into(), json!(name));
+    }
+    if d.match_first_video != cur.match_first_video {
+        p.insert("matchFirstVideo".into(), json!(d.match_first_video));
+    }
+    if d.fill_frame != cur.fill_frame {
+        p.insert("fillFrame".into(), json!(d.fill_frame));
+    }
+    if d.square_pixels && cur.par != (1, 1) {
+        p.insert("par".into(), json!([1, 1]));
+        p.insert("scaleMotion".into(), json!(d.scale_motion));
     }
     let r = rate(d);
     if r != cur.frame_rate {
@@ -330,6 +356,29 @@ fn general(ui: &mut egui::Ui, d: &mut SequenceSettingsDraft, cur: &SequenceSetti
         elems.push(("sequenceSettings.timebase".into(), resp.response.rect, shown));
     });
     section(ui, "Video", |ui| {
+        ui.horizontal(|ui| {
+            for (id, label, a, b) in [("vertical", "Vertical 9:16", 9u32, 16u32), ("horizontal", "Horizontal 16:9", 16, 9), ("square", "Square 1:1", 1, 1)] {
+                let response = ui.button(label);
+                elems.push((format!("sequenceSettings.orientation.{id}"), response.rect, label.into()));
+                if response.clicked() {
+                    let long = d.width.max(d.height).clamp(1, filmcraft_project::MAX_FRAME_SIDE);
+                    let units = (long / a.max(b)).max(1);
+                    let mut size = (a * units, b * units);
+                    while filmcraft_project::validate_frame_size(size.0, size.1).is_err() && size.0 > a && size.1 > b {
+                        size = (size.0 - a, size.1 - b);
+                    }
+                    (d.width, d.height) = size;
+                    d.square_pixels = true;
+                    d.match_first_video = false;
+                    d.fill_frame = true;
+                    d.scale_motion = true;
+                }
+            }
+        });
+        let response = ui.checkbox(&mut d.match_first_video, "Match settings to the first video added to an empty sequence");
+        elems.push(("sequenceSettings.matchFirstVideo".into(), response.rect, d.match_first_video.to_string()));
+        let response = ui.checkbox(&mut d.fill_frame, "Fill the sequence frame, cropping when needed");
+        elems.push(("sequenceSettings.fillFrame".into(), response.rect, d.fill_frame.to_string()));
         row(ui, label_w, "Frame Size:", true, |ui| {
             let w = ui.add(crate::widgets::number_drag(&mut d.width).range(1..=filmcraft_project::MAX_FRAME_SIDE).speed(1.0));
             elems.push(("sequenceSettings.width".into(), w.rect, d.width.to_string()));
@@ -337,14 +386,19 @@ fn general(ui: &mut egui::Ui, d: &mut SequenceSettingsDraft, cur: &SequenceSetti
             let h = ui.add(crate::widgets::number_drag(&mut d.height).range(1..=filmcraft_project::MAX_FRAME_SIDE).speed(1.0));
             elems.push(("sequenceSettings.height".into(), h.rect, d.height.to_string()));
             ui.label(tl!("vertical"));
+            if w.changed() || h.changed() {
+                d.match_first_video = false;
+            }
             // the display aspect: 1440 x 1080 with 4:3 pixels is 16:9
-            let a = aspect(display_width(d.width, d.height, cur.par), d.height);
+            let a = aspect(display_width(d.width, d.height, if d.square_pixels { (1, 1) } else { cur.par }), d.height);
             let ar = ui.label(&a);
             elems.push(("sequenceSettings.aspect".into(), ar.rect, a));
         });
         let r = ui.checkbox(&mut d.scale_motion, tl!("Scale motion effects proportionally when changing frame size"));
         elems.push(("sequenceSettings.scaleMotion".into(), r.rect, d.scale_motion.to_string()));
-        row(ui, label_w, "Pixel Aspect Ratio:", false, |ui| fixed_combo(ui, elems, "par", &par_label(cur.par), list_w, NOT_YET));
+        row(ui, label_w, "Pixel Aspect Ratio:", false, |ui| {
+            fixed_combo(ui, elems, "par", &par_label(if d.square_pixels { (1, 1) } else { cur.par }), list_w, NOT_YET)
+        });
         row(ui, label_w, "Fields:", false, |ui| fixed_combo(ui, elems, "fields", "No Fields (Progressive Scan)", list_w, NOT_YET));
         row(ui, label_w, "Display Format:", true, |ui| {
             let r = rate(d);
@@ -605,7 +659,7 @@ mod tests {
         let (p, rest) = new_sequence_params(&d);
         assert_eq!(
             Value::Object(p),
-            json!({"name":"Shorts","width":1080,"height":1920,"fps":24_000.0/1001.0,"sampleRate":48_000,"mix":"Stereo","video":2,"audio":4})
+            json!({"name":"Shorts","width":1080,"height":1920,"fps":24_000.0/1001.0,"sampleRate":48_000,"mix":"Stereo","video":2,"audio":4,"matchFirstVideo":true,"fillFrame":true})
         );
         assert!(rest.is_empty(), "everything else is the default: {rest:?}");
         // what file.newSequence has no parameter for follows on the new sequence; a blank name

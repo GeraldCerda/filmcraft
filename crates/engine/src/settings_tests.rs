@@ -390,6 +390,7 @@ fn label_defaults_names_and_colours() {
 fn default_media_scaling() {
     let dir = tmp_dir("prefs-scaling");
     let mut s = demo();
+    s.execute("sequence.settings", json!({"fillFrame": false})).unwrap();
     let (w, h) = s.active_sequence().map(|q| (q.settings.width, q.settings.height)).unwrap();
     let big = import_png(&mut s, &dir, "big.png", w * 2, h * 2);
     let place = |s: &mut Session| {
@@ -850,4 +851,100 @@ fn builtin_label_presets_are_complete_and_distinct() {
         assert_eq!(labels.name(label), role);
     }
     assert!(!settings::is_builtin_label_preset("Team"));
+}
+
+#[test]
+fn first_video_matching_and_explicit_orientation_are_one_undo_step() {
+    let mut s = Session::default();
+    let media = s.execute("file.newColorMatte", json!({"width":1080,"height":1920,"seconds":1.0})).unwrap()["item"].as_u64().unwrap();
+    s.execute("file.newSequence", json!({})).unwrap();
+    let before = (*s.project).clone();
+    s.execute("timeline.place", json!({"item":media,"track":"V1","time":0})).unwrap();
+    let q = s.active_sequence().unwrap();
+    assert_eq!((q.settings.width, q.settings.height), (1080, 1920));
+    assert!(!q.settings.match_first_video);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(*s.project, before);
+    s.execute("sequence.settings", json!({"width":1920,"height":1080,"matchFirstVideo":false})).unwrap();
+    s.execute("timeline.place", json!({"item":media,"track":"V1","time":0})).unwrap();
+    let q = s.active_sequence().unwrap();
+    assert_eq!((q.settings.width, q.settings.height), (1920, 1080));
+    let clip = &q.video_tracks[0].items[0];
+    let ParamValue::Float(scale) = clip.effect("motion").unwrap().params["scale"].value else { panic!() };
+    assert!((scale - 100.0 * 1919.0 / 1079.0).abs() < 1e-8);
+}
+
+#[test]
+fn orientation_fill_round_trip_preserves_clip_scale() {
+    let mut s = Session::default();
+    let media = s.execute("file.newColorMatte", json!({"width":1920,"height":1080,"seconds":1.0})).unwrap()["item"].as_u64().unwrap();
+    s.execute("file.newSequence", json!({"width":1920,"height":1080})).unwrap();
+    s.execute("timeline.place", json!({"item":media,"track":"V1","time":0})).unwrap();
+    for _ in 0..5 {
+        s.execute("sequence.settings", json!({"width":1080,"height":1920,"scaleMotion":true})).unwrap();
+        s.execute("sequence.settings", json!({"width":1920,"height":1080,"scaleMotion":true})).unwrap();
+    }
+    let clip = &s.active_sequence().unwrap().video_tracks[0].items[0];
+    let ParamValue::Float(scale) = clip.effect("motion").unwrap().params["scale"].value else { panic!() };
+    assert!((scale - 100.0).abs() < 1e-8);
+}
+
+#[test]
+fn export_commands_reject_missing_and_blank_destinations() {
+    let mut s = demo();
+    let jobs = s.jobs.len();
+    for command in ["file.exportMedia", "export.quick", "export.queue.add"] {
+        for params in [json!({}), json!({"path":""}), json!({"path":"  "})] {
+            assert!(s.execute(command, params).is_err());
+        }
+    }
+    assert_eq!(s.jobs.len(), jobs);
+    assert!(s.export_queue.items.is_empty());
+}
+
+#[test]
+fn configured_cache_keeps_saved_previews_outside_source_folders() {
+    let mut s = demo();
+    s.prefs.media_cache.location = "/chosen-cache/FilmCraft Cache".into();
+    s.prefs.media_cache.setup_version = "custom-sequence-1".into();
+    s.path = Some("/source-one/Edit.fcproj".into());
+    let first = crate::project_tools::previews_dir(&s).unwrap();
+    s.path = Some("/source-two/Edit.fcproj".into());
+    let second = crate::project_tools::previews_dir(&s).unwrap();
+    assert_ne!(first, second);
+    assert!(first.starts_with("/chosen-cache/FilmCraft Cache/Previews"));
+}
+
+#[test]
+fn source_folder_is_suggested_and_original_file_cannot_be_exported_over() {
+    let dir = tmp_dir("source-export-protection");
+    let mut s = demo();
+    let id = import_png(&mut s, &dir, "source.png", 32, 18);
+    s.execute("timeline.place", json!({"item":id.0,"track":"V1","time":0})).unwrap();
+    assert_eq!(crate::export_tools::default_export_dir(&s), dir);
+    let path = dir.join("source.png");
+    let original = std::fs::read(&path).unwrap();
+    let jobs = s.jobs.len();
+    for command in ["file.exportMedia", "export.queue.add"] {
+        let error = s.execute(command, json!({"path":path,"format":"png"})).unwrap_err();
+        assert!(error.to_string().contains("source media"), "{error}");
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert_eq!(s.jobs.len(), jobs);
+    assert!(s.export_queue.items.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn imported_picture_covers_all_corners_of_a_vertical_sequence() {
+    let mut s = Session::default();
+    let item = s.execute("file.newColorMatte", json!({"width":16,"height":9,"seconds":1.0})).unwrap()["item"].as_u64().unwrap();
+    s.execute("file.newSequence", json!({"width":9,"height":16,"fps":24})).unwrap();
+    s.execute("timeline.place", json!({"item":item,"track":"V1","time":0})).unwrap();
+    s.execute("playhead.set", json!({"seconds":0.5})).unwrap();
+    let image = s.render_program(1.0).unwrap();
+    assert_eq!((image.w, image.h), (9, 16));
+    for (x, y) in [(0, 0), (8, 0), (0, 15), (8, 15)] {
+        assert!(image.get(x, y)[3] > 0.99);
+    }
 }

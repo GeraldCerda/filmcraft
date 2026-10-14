@@ -1,0 +1,22 @@
+FilmCraft 0.7.2 custom sequence patch
+
+This customized fork is based on FilmCraft by the ArtCraft team.
+
+Sequence Settings: Vertical 9:16, Horizontal 16:9 and Square 1:1 presets. Match an empty sequence to its first imported video. Explicit orientation choices stay fixed. Imported video fills the sequence frame and crops when necessary. Frame size changes preserve motion and undo.
+
+Mac shortcuts: Command E slices at the playhead. Command C copies. Command X cuts. Command { zooms out. Command } zooms in. Command S saves. Command Z undoes. Command Shift R opens export settings.
+
+Every GUI export and queue addition requires choosing a destination. The source video folder is suggested. Cancellation writes nothing. Exporting over imported source media is blocked.
+
+On first launch of this customized version, choose a folder for FilmCraft Cache. Render previews for saved and unsaved projects use the chosen cache root. Project files and source media remain in their existing locations.
+
+To install on your Mac, extract this repository and run:
+bash packaging/macos/install-custom.sh
+
+If the app is somewhere other than /Applications/FilmCraft.app or your Applications folder, pass the full app path as the first argument.
+
+The installer builds natively on the Mac, signs the rebuilt bundle locally, preserves a timestamped backup of your existing app and rolls back if replacement fails. Apple Command Line Tools and Rust are required; the script handles Rust installation and opens Apple's tool installer when necessary. Compilation may take time and requires internet access and free disk space.
+
+To build on an external drive, set FILMCRAFT_BUILD_DIR to a folder on that drive before running the installer. The build folder is separate from the cache folder chosen on app startup.
+
+This custom build is locally signed. It is not an official notarized FilmCraft release. Native macOS installation must be verified on a Mac.

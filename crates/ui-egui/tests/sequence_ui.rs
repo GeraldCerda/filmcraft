@@ -820,3 +820,38 @@ fn new_sequence_stays_open_on_invalid_frame_size() {
     assert_eq!(d.label("sequenceSettings.width"), "20000");
     assert_eq!(d.label("sequenceSettings.height"), "20000");
 }
+
+#[test]
+fn native_menu_opens_orientation_settings_and_preserves_undo() {
+    let mut d = Driver::demo();
+    let before = (*d.app().session.project).clone();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    d.app().command_inbox = Some(receiver);
+    sender.send("sequence.settings".into()).unwrap();
+    d.frames(12);
+    d.click("sequenceSettings.orientation.vertical");
+    assert_eq!(d.label("sequenceSettings.width"), "1080");
+    assert_eq!(d.label("sequenceSettings.height"), "1920");
+    assert_eq!(d.label("sequenceSettings.fillFrame"), "true");
+    assert_eq!(d.label("sequenceSettings.matchFirstVideo"), "false");
+    d.snapshot("sequence-settings-vertical", "sequenceSettings.");
+    d.click("sequenceSettings.ok");
+    let settings = &d.app().session.active_sequence().unwrap().settings;
+    assert_eq!((settings.width, settings.height), (1080, 1920));
+    d.exec("edit.undo", json!({}));
+    assert_eq!(*d.app().session.project, before);
+}
+
+#[test]
+fn horizontal_and_square_buttons_change_dimensions() {
+    let mut d = Driver::demo();
+    d.ok("ui.menu.invoke", json!({"id":"sequence.settings"}));
+    d.frames(12);
+    d.click("sequenceSettings.orientation.vertical");
+    d.click("sequenceSettings.orientation.horizontal");
+    assert_eq!(d.label("sequenceSettings.width"), "1920");
+    assert_eq!(d.label("sequenceSettings.height"), "1080");
+    d.click("sequenceSettings.orientation.square");
+    assert_eq!(d.label("sequenceSettings.width"), "1920");
+    assert_eq!(d.label("sequenceSettings.height"), "1920");
+}

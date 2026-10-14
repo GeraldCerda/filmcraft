@@ -371,6 +371,18 @@ pub fn range_param(s: &Session, project: &Project, seq: ItemId, v: Option<&Value
 /// Where exports go when no path is given: next to the saved project, else ~/Movies, else the
 /// home directory, else the temporary directory.
 pub fn default_export_dir(s: &Session) -> PathBuf {
+    if let Some(sequence) = s.active_sequence() {
+        for track in &sequence.video_tracks {
+            for item in &track.items {
+                if let Some((_, media, _)) = s.project.resolve_media(item.item)
+                    && let filmcraft_project::MediaRef::File { path } = &media.media
+                    && let Some(parent) = Path::new(path).parent().filter(|p| !p.as_os_str().is_empty())
+                {
+                    return parent.to_path_buf();
+                }
+            }
+        }
+    }
     if let Some(d) = s.path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| !d.as_os_str().is_empty()) {
         return d.to_path_buf();
     }
@@ -463,7 +475,24 @@ fn write_sidecar(s: &Session, project: &Project, seq: ItemId, settings: &ExportS
 }
 
 /// Run an export of `seq` in `project` as a background job (or now, with `wait`); returns the job id.
+fn protect_source_media(project: &Project, path: &str) -> Result<()> {
+    let canonical = std::fs::canonicalize(path).ok();
+    let source = project.items.values().any(|item| {
+        if let filmcraft_project::ItemKind::Media(media) = &item.kind
+            && let filmcraft_project::MediaRef::File { path: source } = &media.media
+        {
+            return source == path || canonical.as_ref().is_some_and(|p| std::fs::canonicalize(source).ok().as_ref() == Some(p));
+        }
+        false
+    });
+    if source {
+        return Err(bad("export", "choose another filename: the export destination is source media"));
+    }
+    Ok(())
+}
+
 pub fn spawn_export(s: &mut Session, project: Arc<Project>, seq: ItemId, mut settings: ExportSettings, label: String, wait: bool) -> Result<u64> {
+    protect_source_media(&project, &settings.path)?;
     let format = settings.format;
     if !filmcraft_export::available(format) {
         return Err(EngineError::Other(format!("{} export is not available (no encoder registered)", format.label())));
@@ -536,7 +565,7 @@ pub fn export_media(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.exportMedia";
     let seq = sequence_param(s, p, cmd)?;
     let (preset, mut settings) = settings_from_params(s, p, cmd)?;
-    if str_p(p, "path").is_none() {
+    if str_p(p, "path").is_none_or(|path| path.trim().is_empty()) {
         return Err(bad(cmd, "need `path`"));
     }
     let project = s.project.clone();
@@ -715,6 +744,9 @@ fn queue_item_p(s: &Session, p: &Value, cmd: &str) -> Result<usize> {
 
 fn queue_add(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "export.queue.add";
+    if str_p(p, "path").is_none_or(|path| path.trim().is_empty()) {
+        return Err(bad(cmd, "choose an export destination with `path`"));
+    }
     let (preset, settings) = settings_from_params(s, p, cmd)?;
     let seqs: Vec<ItemId> = match p.get("sequences").and_then(Value::as_array) {
         Some(a) => a.iter().filter_map(Value::as_u64).map(ItemId).collect(),
@@ -748,6 +780,7 @@ fn queue_add(s: &mut Session, p: &Value) -> Result<Value> {
             // several ranges of one sequence get numbered names; several sequences their own names
             let suffix = if many && (ranges.len() > 1 || str_p(p, "path").is_some_and(|x| !is_folder(&expand_home(x)))) { Some(n) } else { None };
             st.path = output_path(s, p, seq, &st, suffix);
+            protect_source_media(&project, &st.path)?;
             n += 1;
             items.push((seq, st));
         }
@@ -895,6 +928,9 @@ fn queue_clear(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn quick(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "export.quick";
+    if str_p(p, "path").is_none_or(|path| path.trim().is_empty()) {
+        return Err(bad(cmd, "choose an export destination with `path`"));
+    }
     let name = str_p(p, "preset").map(str::to_string).or_else(|| s.export_queue.quick_preset.clone()).unwrap_or_else(|| DEFAULT_PRESET.to_string());
     let mut q = p.clone();
     if !q.is_object() {
@@ -1150,7 +1186,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
         spec(
             "export.queue.add",
             "Send to Export Queue",
-            r#"{…settings params,"path":str|dir?,"sequences":[id]?,"ranges":[range]?,"start":bool?,"wait":bool?}"#,
+            r#"{…settings params,"path":str|dir,"sequences":[id]?,"ranges":[range]?,"start":bool?,"wait":bool?}"#,
             has_seq,
             queue_add,
             true,
@@ -1163,7 +1199,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
         spec("export.queue.remove", "Remove Queued Export", r#"{"id":id}"#, always, queue_remove, true),
         spec("export.queue.move", "Reorder Queued Export", r#"{"id":id,"to":index?,"by":int?}"#, always, queue_move, true),
         spec("export.queue.clear", "Clear Finished Exports", r#"{"all":bool=false}"#, always, queue_clear, true),
-        spec("export.quick", "Quick Export", r#"{"preset":str?,"path":str?,"wait":bool?, …settings params}"#, has_seq, quick, true),
+        spec("export.quick", "Quick Export", r#"{"preset":str?,"path":str,"wait":bool?, …settings params}"#, has_seq, quick, true),
     ]
 }
 

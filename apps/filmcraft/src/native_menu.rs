@@ -14,8 +14,15 @@ fn accel(s: &str) -> Option<Accelerator> {
     if !(s.contains("Cmd+") || s.contains("Ctrl+") || s.contains("Alt+")) {
         return None;
     }
-    let mapped =
-        s.replace("Cmd+", "CmdOrCtrl+").replace(";", "Semicolon").replace("'", "Quote").replace("/", "Slash").replace("=", "Equal").replace("\\", "Backslash");
+    let mapped = s
+        .replace("[", "BracketLeft")
+        .replace("]", "BracketRight")
+        .replace("Cmd+", "CmdOrCtrl+")
+        .replace(";", "Semicolon")
+        .replace("'", "Quote")
+        .replace("/", "Slash")
+        .replace("=", "Equal")
+        .replace("\\", "Backslash");
     mapped.parse().ok()
 }
 

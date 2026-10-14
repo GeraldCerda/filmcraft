@@ -70,6 +70,75 @@ pub fn scale_motion(seq: &mut Sequence, from: (u32, u32), to: (u32, u32)) -> usi
     n
 }
 
+pub fn cover_scale(frame: (f64, f64), source: (f64, f64), source_pixel_width: f64, frame_pixel_width: f64) -> Option<f64> {
+    if ![frame.0, frame.1, source.0, source.1, source_pixel_width, frame_pixel_width].iter().all(|v| v.is_finite() && *v > 0.0) {
+        return None;
+    }
+    let mut scale = (frame.0 / source.0).max(frame.1 / source.1);
+    if scale > 1.0 {
+        if source.0 > source_pixel_width && frame.0 > frame_pixel_width {
+            scale = scale.max((frame.0 - frame_pixel_width) / (source.0 - source_pixel_width));
+        }
+        if source.1 > 1.0 && frame.1 > 1.0 {
+            scale = scale.max((frame.1 - 1.0) / (source.1 - 1.0));
+        }
+    }
+    Some(scale)
+}
+
+pub fn scale_motion_fill(
+    seq: &mut Sequence,
+    from: (u32, u32),
+    to: (u32, u32),
+    sizes: &std::collections::BTreeMap<filmcraft_project::ItemId, (f64, f64, f64)>,
+    pixel_ratio: f64,
+) -> usize {
+    if (from == to && pixel_ratio == 1.0) || from.0 == 0 || from.1 == 0 || to.0 == 0 || to.1 == 0 || !pixel_ratio.is_finite() || pixel_ratio <= 0.0 {
+        return 0;
+    }
+    let mut count = 0;
+    for track in seq.all_tracks_mut().filter(|track| track.kind == TrackKind::Video) {
+        for item in &mut track.items {
+            let (w, h, source_pixel_width) = sizes.get(&item.item).copied().unwrap_or((f64::from(from.0), f64::from(from.1), 1.0));
+            if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+                continue;
+            }
+            let Some(old_cover) = cover_scale((f64::from(from.0) * pixel_ratio, f64::from(from.1)), (w, h), source_pixel_width, pixel_ratio) else {
+                continue;
+            };
+            let Some(new_cover) = cover_scale((f64::from(to.0), f64::from(to.1)), (w, h), source_pixel_width, 1.0) else {
+                continue;
+            };
+            let factor = new_cover / old_cover;
+            let refit = item.scale_to_frame;
+            let scale_factor = if refit { new_cover } else { factor };
+            if let Some(motion) = item.effect_mut("motion") {
+                if let Some(position) = motion.param_mut("position") {
+                    position.map_values(|value| match value {
+                        ParamValue::Vec2(mut v) => {
+                            v.x = f64::from(to.0) / 2.0 + factor * pixel_ratio * (v.x - f64::from(from.0) / 2.0);
+                            v.y = f64::from(to.1) / 2.0 + factor * (v.y - f64::from(from.1) / 2.0);
+                            ParamValue::Vec2(v)
+                        }
+                        other => other,
+                    });
+                }
+                for id in ["scale", "scale_width"] {
+                    if let Some(scale) = motion.param_mut(id) {
+                        scale.map_values(|value| match value {
+                            ParamValue::Float(v) => ParamValue::Float((v * scale_factor).clamp(0.0, MAX_SCALE)),
+                            other => other,
+                        });
+                    }
+                }
+                item.scale_to_frame = false;
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

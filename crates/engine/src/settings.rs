@@ -657,6 +657,7 @@ impl Default for MediaAnalysisPrefs {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MediaCachePrefs {
+    pub setup_version: String,
     /// Media Cache Files location; empty = `<data dir>/Media Cache`.
     pub location: String,
     pub save_next_to_media: bool,
@@ -671,6 +672,7 @@ pub struct MediaCachePrefs {
 impl Default for MediaCachePrefs {
     fn default() -> Self {
         Self {
+            setup_version: String::new(),
             location: String::new(),
             save_next_to_media: false,
             database_location: String::new(),
@@ -1582,12 +1584,23 @@ pub fn map_output(left: &[f32], right: &[f32], out: &mut [f32], ch: usize, map: 
 /// is the clip's size at its display aspect in sequence pixels
 /// ([`filmcraft_project::conformed_size`]): `scaleToFrameSize` turns on Scale to Frame Size
 /// (rasterised at frame size), `setToFrameSize` sets Motion ▸ Scale so the picture fits the frame.
-pub fn apply_media_scaling(ti: &mut filmcraft_project::TrackItem, scaling: &str, frame: (u32, u32), src: (f64, f64)) {
+pub fn apply_media_scaling(ti: &mut filmcraft_project::TrackItem, scaling: &str, frame: (u32, u32), src: (f64, f64), source_pixel_width: f64) {
     if !(src.0 >= 1e-9 && src.1 >= 1e-9 && src.0.is_finite() && src.1.is_finite()) {
         return;
     }
     match scaling {
         "scaleToFrameSize" => ti.scale_to_frame = true,
+        "fillFrame" => {
+            ti.scale_to_frame = false;
+            let Some(scale) =
+                filmcraft_edit::frame_size::cover_scale((f64::from(frame.0), f64::from(frame.1)), src, source_pixel_width, 1.0).map(|scale| scale * 100.0)
+            else {
+                return;
+            };
+            if let Some(m) = ti.effect_mut("motion") {
+                m.params.insert("scale".into(), filmcraft_project::Param::new(filmcraft_project::ParamValue::Float(scale.clamp(0.0, 10_000.0))));
+            }
+        }
         "setToFrameSize" => {
             let fit = (frame.0 as f64 / src.0).min(frame.1 as f64 / src.1);
             if let Some(m) = ti.effects.iter_mut().find(|e| e.effect == "motion") {

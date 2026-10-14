@@ -851,6 +851,9 @@ pub struct TransitionDurationDraft {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SequenceSettingsDraft {
+    pub square_pixels: bool,
+    pub match_first_video: bool,
+    pub fill_frame: bool,
     pub tab: String,
     /// The sequence's name (its Project panel item); a blank name keeps the current one.
     pub name: String,
@@ -876,6 +879,9 @@ pub struct SequenceSettingsDraft {
 impl Default for SequenceSettingsDraft {
     fn default() -> Self {
         Self {
+            square_pixels: false,
+            match_first_video: true,
+            fill_frame: true,
             tab: "general".into(),
             name: String::new(),
             new_sequence: false,

@@ -981,13 +981,19 @@ pub(crate) fn place_item(
     if !has_v && !has_a {
         return Err(EngineError::Other("no destination track for this media (check source patching)".into()));
     }
-    let src_size = match &pi.kind {
-        ItemKind::Media(m) => m.info.video.as_ref().map(|v| (v.width, v.height)),
-        ItemKind::Sequence(q) => Some((q.settings.width, q.settings.height)),
-        ItemKind::AdjustmentLayer { width, height, .. } => Some((*width, *height)),
-        _ => None,
-    }
-    .unwrap_or((1920, 1080));
+    let root_media = s.project.resolve_media(item).map(|(_, m, _)| m.clone());
+    let matched = root_media.as_ref().filter(|m| m.info.video.is_some() && m.info.kind != filmcraft_media::MediaKind::Still).map(default_seq_settings_for);
+    let src_size = root_media
+        .as_ref()
+        .and_then(|m| m.info.video.as_ref())
+        .map(|v| (v.width, v.height))
+        .or_else(|| match &pi.kind {
+            ItemKind::Media(m) => m.info.video.as_ref().map(|v| (v.width, v.height)),
+            ItemKind::Sequence(q) => Some((q.settings.width, q.settings.height)),
+            ItemKind::AdjustmentLayer { width, height, .. } => Some((*width, *height)),
+            _ => None,
+        })
+        .unwrap_or((1920, 1080));
     // `None`: drawn in the pixels of the sequence it is placed in
     let src_par = s.project.source_par(item);
     let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
@@ -995,7 +1001,24 @@ pub(crate) fn place_item(
     let scaling = s.prefs.media.default_media_scaling.clone();
     let is_media = matches!(pi.kind, ItemKind::Media(_) | ItemKind::Subclip { .. });
     s.edit(label, |p, st| {
+        let q = p.sequence_mut(seq_id).ok_or(EngineError::NoSequence)?;
+        if has_v
+            && q.settings.match_first_video
+            && q.all_tracks().all(|t| t.items.is_empty())
+            && let Some(matched) = &matched
+        {
+            matched.validate().map_err(|e| bad(label, e))?;
+            q.settings.width = matched.width;
+            q.settings.height = matched.height;
+            q.settings.frame_rate = matched.frame_rate;
+            q.settings.par = matched.par;
+            q.settings.sample_rate = matched.sample_rate;
+            q.settings.preset = matched.preset.clone();
+            q.settings.drop_frame = matched.frame_rate.supports_drop_frame();
+            q.settings.match_first_video = false;
+        }
         let seq = p.sequence(seq_id).ok_or(EngineError::NoSequence)?;
+        let scaling = if seq.settings.fill_frame { "fillFrame" } else { scaling.as_str() };
         let rate = seq.settings.frame_rate;
         let frame = (seq.settings.width, seq.settings.height);
         let seq_par = seq.settings.par;
@@ -1010,7 +1033,7 @@ pub(crate) fn place_item(
             // the picture's size at its display aspect, in sequence pixels
             let shown = filmcraft_project::conformed_size(src_size, src_par.unwrap_or(seq_par), seq_par);
             if is_media && shown != (f64::from(frame.0), f64::from(frame.1)) {
-                crate::settings::apply_media_scaling(&mut v, &scaling, frame, shown);
+                crate::settings::apply_media_scaling(&mut v, scaling, frame, shown, shown.0 / f64::from(src_size.0.max(1)));
             }
             placements.push((vdest, v));
         }
@@ -1173,7 +1196,7 @@ fn build() -> Vec<CommandSpec> {
             "Sequence…",
             ["File", "New"],
             Some("Cmd+N"),
-            r#"{"name":str,"width":u32=1920,"height":u32=1080,"fps":f64=23.976,"sampleRate":u32=48000,"video":n=3,"audio":n=3,"mix":"Stereo|Mono|5.1|Adaptive"?,"trackType":"Standard|Mono|5.1|Adaptive"?,"fromItem":itemId?,"fromItems":[itemId]?}"#,
+            r#"{"name":str,"width":u32=1920,"height":u32=1080,"fps":f64=23.976,"sampleRate":u32=48000,"video":n=3,"audio":n=3,"mix":"Stereo|Mono|5.1|Adaptive"?,"trackType":"Standard|Mono|5.1|Adaptive"?,"fromItem":itemId?,"fromItems":[itemId]?,"matchFirstVideo":bool?,"fillFrame":bool?}"#,
             always,
             |s, p| s.edit_group("New Sequence", |s| {
                 // `fromItems` is `fromItem` for a list: the first sets the sequence, the rest follow it back to back
@@ -1214,6 +1237,9 @@ fn build() -> Vec<CommandSpec> {
                     ),
                     None => None,
                 };
+                st.match_first_video =
+                    bool_p(p, "matchFirstVideo").unwrap_or(from_ids.is_empty() && !["width", "height", "fps"].iter().any(|key| p.get(key).is_some()));
+                st.fill_frame = bool_p(p, "fillFrame").unwrap_or(true);
                 st.preset = format!("{}x{} {}", st.width, st.height, st.frame_rate.label());
                 st.validate().map_err(|e| bad("file.newSequence", e))?;
                 let nv = checked_u32_p(p, "video", "file.newSequence")?.unwrap_or(3);
@@ -2183,7 +2209,7 @@ fn build() -> Vec<CommandSpec> {
             "Sequence Settings…",
             ["Sequence"],
             None,
-            r#"{"width":u32?,"height":u32?,"fps":f64?,"name":str?,"sampleRate":u32?,"mix":"Stereo|Mono|5.1|Adaptive"?,"dropFrame":bool?,"maxRenderQuality":bool?,"workingSpace":"rec709"|"rec2100-pq"|"rec2100-hlg"?,"wideGamut":bool?,"autoToneMap":bool?,"scaleMotion":bool=false}"#,
+            r#"{"width":u32?,"height":u32?,"fps":f64?,"name":str?,"sampleRate":u32?,"mix":"Stereo|Mono|5.1|Adaptive"?,"dropFrame":bool?,"maxRenderQuality":bool?,"workingSpace":"rec709"|"rec2100-pq"|"rec2100-hlg"?,"wideGamut":bool?,"autoToneMap":bool?,"scaleMotion":bool=false,"matchFirstVideo":bool?,"fillFrame":bool?,"par":[u32,u32]?}"#,
             has_seq,
             |s, p| {
                 const CMD: &str = "sequence.settings";
@@ -2202,14 +2228,59 @@ fn build() -> Vec<CommandSpec> {
                 if drop_frame == Some(true) && !rate.supports_drop_frame() {
                     return Err(bad(CMD, format!("drop-frame timecode needs a 29.97, 59.94 or 119.88 fps timebase, not {rate}")));
                 }
+                let par = if let Some(value) = p.get("par") {
+                    let values = value.as_array().filter(|values| values.len() == 2).ok_or_else(|| bad(CMD, "par must contain two positive integers"))?;
+                    let component = |index: usize| {
+                        values
+                            .get(index)
+                            .and_then(Value::as_u64)
+                            .and_then(|value| u32::try_from(value).ok())
+                            .ok_or_else(|| bad(CMD, "par must contain two positive integers"))
+                    };
+                    Some(filmcraft_project::checked_par((component(0)?, component(1)?)).ok_or_else(|| bad(CMD, "invalid pixel aspect ratio"))?)
+                } else {
+                    None
+                };
                 let scale_motion = bool_p(p, "scaleMotion").unwrap_or(false);
                 let p = p.clone();
+                let mut sizes = std::collections::BTreeMap::new();
+                if let Some(q) = s.active_sequence() {
+                    let target_par = par.unwrap_or(q.settings.par);
+                    for t in &q.video_tracks {
+                        for item in &t.items {
+                            let source =
+                                s.project.resolve_media(item.item).and_then(|(_, m, _)| m.info.video.as_ref()).map(|v| (v.width, v.height)).or_else(|| match s
+                                    .project
+                                    .item(item.item)
+                                    .map(|item| &item.kind)
+                                {
+                                    Some(ItemKind::Sequence(sequence)) => Some((sequence.settings.width, sequence.settings.height)),
+                                    Some(ItemKind::AdjustmentLayer { width, height, .. }) => Some((*width, *height)),
+                                    _ => None,
+                                });
+                            if let Some(source) = source {
+                                let shown = filmcraft_project::conformed_size(source, s.project.source_par(item.item).unwrap_or(target_par), target_par);
+                                sizes.insert(item.item, (shown.0, shown.1, shown.0 / f64::from(source.0.max(1))));
+                            }
+                        }
+                    }
+                }
                 let scaled = s.edit("Sequence Settings", |pr, _| {
                     if let Some(n) = str_p(&p, "name") {
                         pr.item_mut(id).ok_or(EngineError::NoSequence)?.name = n.to_string();
                     }
                     let q = pr.sequence_mut(id).ok_or(EngineError::NoSequence)?;
                     let old_size = (q.settings.width, q.settings.height);
+                    let old_par = q.settings.par;
+                    if let Some(par) = par {
+                        q.settings.par = par;
+                    }
+                    if let Some(value) = bool_p(&p, "matchFirstVideo") {
+                        q.settings.match_first_video = value;
+                    }
+                    if let Some(value) = bool_p(&p, "fillFrame") {
+                        q.settings.fill_frame = value;
+                    }
                     if let Some(w) = checked_u32_p(&p, "width", CMD)? {
                         q.settings.width = w;
                     }
@@ -2244,7 +2315,21 @@ fn build() -> Vec<CommandSpec> {
                     q.settings.working_space = q.settings.color.working.label().into();
                     q.settings.validate().map_err(|e| bad(CMD, e))?;
                     let new_size = (q.settings.width, q.settings.height);
-                    Ok(if scale_motion { edit::frame_size::scale_motion(q, old_size, new_size) } else { 0 })
+                    Ok(if scale_motion {
+                        if q.settings.fill_frame {
+                            edit::frame_size::scale_motion_fill(
+                                q,
+                                old_size,
+                                new_size,
+                                &sizes,
+                                filmcraft_project::par_ratio(old_par) / filmcraft_project::par_ratio(q.settings.par),
+                            )
+                        } else {
+                            edit::frame_size::scale_motion(q, old_size, new_size)
+                        }
+                    } else {
+                        0
+                    })
                 })?;
                 Ok(json!({"scaledClips": scaled}))
             }
@@ -4361,12 +4446,10 @@ fn install_project(s: &mut Session, proj: filmcraft_project::Project, path: Opti
     s.state = crate::Session::default().state;
     s.state.active_sequence = first;
     s.state.open_sequences = first.into_iter().collect();
-    if let Some(p) = &path
-        && !cfg!(target_arch = "wasm32")
-    {
-        s.previews.set_dir(Some(crate::project_tools::previews_dir_for(&s.project, p)));
-    }
     s.path = path;
+    if !cfg!(target_arch = "wasm32") {
+        s.previews.set_dir(crate::project_tools::previews_dir(s));
+    }
     s.revision += 1;
     // A recovered project is unsaved: its saved revision is one that never existed.
     s.saved_revision = if clean { s.revision } else { 0 };

@@ -147,11 +147,74 @@ pub fn export_params(app: &FilmcraftApp) -> Value {
     p
 }
 
+fn choose_export_destination(app: &mut FilmcraftApp, command: &'static str, mut params: Value) {
+    let Some(sequence) = app.session.state.active_sequence else {
+        return;
+    };
+    params["sequence"] = json!(sequence.0);
+    let proposed = params["path"].as_str().unwrap_or("").to_string();
+    let settings = match app.session.execute("export.resolve", params.clone()).and_then(|value| {
+        serde_json::from_value::<ExportSettings>(value["settings"].clone()).map_err(|error| filmcraft_engine::EngineError::Other(error.to_string()))
+    }) {
+        Ok(settings) => settings,
+        Err(error) => {
+            app.ui.status = error.to_string();
+            return;
+        }
+    };
+    let extension = settings.extension();
+    app.pick_ui(FileDialog::save_as(settings.format.label(), &[extension], &proposed), move |app, paths| {
+        let Some(path) = paths.into_iter().next() else {
+            app.ui.status = "Export cancelled".into();
+            return;
+        };
+        let name = app.session.project.item(sequence).map(|item| item.name.as_str()).unwrap_or("Sequence");
+        let path = if command == "export.quick" { quick_file(app, &path, name, extension).unwrap_or(path) } else { path };
+        params["path"] = json!(path);
+        let resolved = match app.session.execute("export.resolve", params.clone()) {
+            Ok(value) => value["settings"]["path"].as_str().unwrap_or(&path).to_string(),
+            Err(error) => {
+                app.ui.status = error.to_string();
+                return;
+            }
+        };
+        let candidate = std::fs::canonicalize(&resolved).ok();
+        let source = app.session.project.items.values().any(|item| {
+            if let filmcraft_engine::project::ItemKind::Media(media) = &item.kind
+                && let filmcraft_engine::project::MediaRef::File { path } = &media.media
+            {
+                return path == &resolved || candidate.as_ref().is_some_and(|p| std::fs::canonicalize(path).ok().as_ref() == Some(p));
+            }
+            false
+        });
+        if source {
+            app.ui.status = "Choose another filename: the export destination is source media".into();
+            return;
+        }
+        params["path"] = json!(resolved);
+        match app.session.execute(command, params) {
+            Ok(value) => {
+                app.ui.status = if command == "export.queue.add" {
+                    "Added to the export queue".into()
+                } else {
+                    format!("Exporting {}", value["path"].as_str().unwrap_or(""))
+                };
+                if command == "export.quick" {
+                    app.ui.export.quick_path = path;
+                    app.ui.export.quick_open = false;
+                }
+            }
+            Err(error) => app.ui.status = error.to_string(),
+        }
+    });
+}
+
 fn sync_sequence(app: &mut FilmcraftApp) {
     let Some(seq) = app.session.state.active_sequence else { return };
     if app.ui.export.for_sequence != Some(seq.0) || app.ui.export.file_name.is_empty() {
         app.ui.export.file_name = app.session.project.item(seq).map(|i| i.name.clone()).unwrap_or_else(|| "Sequence".into());
         app.ui.export.for_sequence = Some(seq.0);
+        app.ui.export.location = filmcraft_engine::export_tools::default_export_dir(&app.session).to_string_lossy().into_owned();
     }
     if app.ui.export.location.is_empty() {
         app.ui.export.location = filmcraft_engine::export_tools::default_export_dir(&app.session).to_string_lossy().to_string();
@@ -1149,11 +1212,7 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
     reg.add("export.button", go, "Export");
     reg.flush(app);
     if resp.clicked() {
-        let r = app.session.execute("file.exportMedia", export_params(app));
-        match r {
-            Ok(v) => app.ui.status = tlf!("Exporting {path}", path = v["path"].as_str().unwrap_or("")),
-            Err(e) => app.ui.status = e.to_string(),
-        }
+        choose_export_destination(app, "file.exportMedia", export_params(app));
     }
     if qresp.clicked() {
         let mut p = export_params(app);
@@ -1161,10 +1220,7 @@ fn preview_column(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, seq_id:
             // the queue shows which preset an item came from
             p["preset"] = json!(app.ui.export.preset);
         }
-        match app.session.execute("export.queue.add", p) {
-            Ok(_) => app.ui.status = tl!("Added to the export queue").into(),
-            Err(e) => app.ui.status = e.to_string(),
-        }
+        choose_export_destination(app, "export.queue.add", p);
     }
 }
 
@@ -1479,11 +1535,7 @@ pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::P
     }
     if go {
         let p = json!({"preset": app.ui.export.quick_preset, "path": app.ui.export.quick_path});
-        match app.session.execute("export.quick", p) {
-            Ok(v) => app.ui.status = tlf!("Quick Export: {path}", path = v["path"].as_str().unwrap_or("")),
-            Err(e) => app.ui.status = e.to_string(),
-        }
-        close = true;
+        choose_export_destination(app, "export.quick", p);
     }
     if close || crate::widgets::escape_closes(ctx) || (clicked_elsewhere && !toggled) {
         app.ui.export.quick_open = false;

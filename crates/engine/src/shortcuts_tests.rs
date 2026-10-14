@@ -48,7 +48,7 @@ fn defaults_follow_the_registry_and_the_premiere_audit() {
     with_ui_commands(&mut s);
     let sc = &s.shortcuts;
     assert_eq!(sc.preset, "FilmCraft Default");
-    assert_eq!(sc.primary("sequence.addEdit").as_deref(), Some("Cmd+K"));
+    assert_eq!(sc.primary("sequence.addEdit").as_deref(), Some("Cmd+E"));
     assert_eq!(sc.primary("playback.toggle").as_deref(), Some("Space"));
     // the audit adopts Premiere defaults for commands that had none
     let audit = sc.audit();
@@ -68,7 +68,7 @@ fn defaults_follow_the_registry_and_the_premiere_audit() {
     // command.list reports the live bindings
     let list = s.execute("command.list", json!({})).unwrap();
     let ae = list.as_array().unwrap().iter().find(|c| c["id"] == "sequence.addEdit").unwrap();
-    assert_eq!(ae["shortcut"], json!("Cmd+K"));
+    assert_eq!(ae["shortcut"], json!("Cmd+E"));
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn custom_presets_persist_export_and_import() {
     assert_eq!(t.primary("sequence.addEdit").as_deref(), Some("Cmd+Shift+B"));
     // switch away and back
     s.execute("shortcuts.loadPreset", json!({"name": "FilmCraft Default"})).unwrap();
-    assert_eq!(s.shortcuts.primary("sequence.addEdit").as_deref(), Some("Cmd+K"));
+    assert_eq!(s.shortcuts.primary("sequence.addEdit").as_deref(), Some("Cmd+E"));
     s.execute("shortcuts.loadPreset", json!({"name": "My Keys"})).unwrap();
     assert_eq!(s.shortcuts.primary("sequence.addEdit").as_deref(), Some("Cmd+Shift+B"));
     // export, then import a Windows-notation file
@@ -285,7 +285,7 @@ fn list_searches_labels_and_keys() {
     let mut s = s;
     let v = s.execute("shortcuts.list", json!({"query": "ripple delete"})).unwrap();
     assert!(v.as_array().unwrap().iter().any(|c| c["id"] == "edit.rippleDelete"), "{v}");
-    let v = s.execute("shortcuts.list", json!({"query": "cmd+k", "platform": "windows"})).unwrap();
+    let v = s.execute("shortcuts.list", json!({"query": "cmd+e", "platform": "windows"})).unwrap();
     assert!(v.as_array().unwrap().iter().any(|c| c["id"] == "sequence.addEdit"), "{v}");
     let v = s.execute("shortcuts.list", json!({"panel": "History", "assigned": true})).unwrap();
     assert_eq!(v.as_array().unwrap().len(), 2, "{v}");

@@ -30,7 +30,8 @@ impl Driver {
         s.execute("file.openDemoProject", json!({})).unwrap();
         s.export_presets.set_dir(&dir.join("data"));
         let (tx, rx) = channel();
-        let app = FilmcraftApp::new(s).with_control(rx);
+        let mut app = FilmcraftApp::new(s).with_control(rx);
+        app.hooks.pick_save_as = Some(Box::new(|_, _, path| Some(path.into())));
         let snapshots = std::env::var_os("FILMCRAFT_UI_SNAPSHOT_DIR").map(PathBuf::from);
         let mut b = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000);
         if snapshots.is_some() {
@@ -509,4 +510,22 @@ fn sample_size_lists_every_size_and_greys_out_what_the_format_cannot_store() {
     d.click("export.audio.bits.option.3");
     assert_eq!(d.app().ui.export.settings.audio.sample_format(), SampleFormat::Float32);
     d.snapshot("export-sample-size-prores");
+}
+
+#[test]
+fn cancelling_export_destination_never_starts_or_queues_a_job() {
+    let mut d = Driver::new("cancel-destination");
+    d.app().hooks.pick_save_as = Some(Box::new(|_, _, _| None));
+    d.ok("ui.set", json!({"mode":"export"}));
+    d.frames(4);
+    let jobs = d.app().session.jobs.len();
+    d.click("export.button");
+    assert_eq!(d.app().session.jobs.len(), jobs);
+    assert!(d.app().session.export_queue.items.is_empty());
+    d.click("export.sendToQueue");
+    assert!(d.app().session.export_queue.items.is_empty());
+    d.click("header.quickExport");
+    d.click("quickExport.go");
+    assert_eq!(d.app().session.jobs.len(), jobs);
+    assert!(d.app().ui.export.quick_open);
 }
