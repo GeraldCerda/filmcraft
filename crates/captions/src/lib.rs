@@ -18,6 +18,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod burn;
+pub mod lrc;
 pub mod cea608;
 pub mod mcc;
 pub mod scc;
@@ -33,6 +34,7 @@ use filmcraft_time::{FrameRate, TICKS_PER_SECOND, Tick};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Format {
     Srt,
+    Lrc,
     WebVtt,
     Scc,
     /// MacCaption MCC (CEA-608 + CEA-708 in SMPTE ST 334-2 packets).
@@ -46,10 +48,11 @@ pub enum Format {
 }
 
 impl Format {
-    pub const ALL: [Format; 7] = [Format::Srt, Format::WebVtt, Format::Scc, Format::Mcc, Format::Stl, Format::Ttml, Format::Dfxp];
+    pub const ALL: [Format; 8] = [Format::Srt, Format::Lrc, Format::WebVtt, Format::Scc, Format::Mcc, Format::Stl, Format::Ttml, Format::Dfxp];
     pub fn name(self) -> &'static str {
         match self {
             Format::Srt => "SubRip (SRT)",
+            Format::Lrc => "Synchronized Lyrics (LRC)",
             Format::WebVtt => "WebVTT",
             Format::Scc => "Scenarist SCC (CEA-608)",
             Format::Mcc => "MacCaption MCC (CEA-608/708)",
@@ -61,6 +64,7 @@ impl Format {
     pub fn extension(self) -> &'static str {
         match self {
             Format::Srt => "srt",
+            Format::Lrc => "lrc",
             Format::WebVtt => "vtt",
             Format::Scc => "scc",
             Format::Mcc => "mcc",
@@ -72,6 +76,7 @@ impl Format {
     pub fn from_name(s: &str) -> Option<Format> {
         match s.trim_start_matches('.').to_ascii_lowercase().as_str() {
             "srt" | "subrip" => Some(Format::Srt),
+            "lrc" | "lyrics" => Some(Format::Lrc),
             "vtt" | "webvtt" => Some(Format::WebVtt),
             "scc" | "cea608" | "cea-608" => Some(Format::Scc),
             "mcc" | "maccaption" | "cea708" | "cea-708" => Some(Format::Mcc),
@@ -169,6 +174,10 @@ impl Document {
     }
 }
 
+fn ext_is_lrc(ext: Option<&str>) -> bool {
+    ext.is_some_and(|value| value.eq_ignore_ascii_case("lrc"))
+}
+
 /// Guess a caption format from content (and the file extension as a hint).
 pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if stl::sniff(bytes) {
@@ -176,6 +185,9 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     }
     let text = decode_text(&bytes[..bytes.len().min(4096)]);
     let head = text.trim_start_matches('\u{feff}').trim_start();
+    if ext_is_lrc(ext) && lrc::parse(&text).is_ok() {
+        return Some(Format::Lrc);
+    }
     if head.starts_with("WEBVTT") {
         return Some(Format::WebVtt);
     }
@@ -210,6 +222,7 @@ pub fn parse(bytes: &[u8], format: Format) -> Result<Document> {
     let text = decode_text(bytes);
     match format {
         Format::Srt => srt::parse(&text),
+        Format::Lrc => lrc::parse(&text),
         Format::WebVtt => vtt::parse(&text),
         Format::Scc => scc::parse(&text),
         Format::Mcc => mcc::parse(&text),
@@ -238,6 +251,7 @@ impl Default for WriteOptions {
 pub fn write(doc: &Document, format: Format, opts: WriteOptions) -> Vec<u8> {
     match format {
         Format::Srt => srt::write(doc).into_bytes(),
+        Format::Lrc => lrc::write(doc).into_bytes(),
         Format::WebVtt => vtt::write(doc).into_bytes(),
         Format::Scc => scc::write(doc, opts.drop_frame).into_bytes(),
         Format::Mcc => mcc::write(doc, opts.drop_frame).into_bytes(),
