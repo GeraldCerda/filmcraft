@@ -116,7 +116,9 @@ pub fn route(app: &mut FilmcraftApp, id: &str, params: &Value) -> Option<Result<
     let pfx = prefix(w);
     if let Some(r) = rest.strip_prefix("playbackRes.") {
         let (_, res) = RES_NAMES.iter().find(|(n, _)| *n == r)?;
-        view_mut(app, w).res = *res;
+        let view = view_mut(app, w);
+        view.res = *res;
+        view.paused_res = *res;
         return Some(Ok(json!({"monitor": pfx, "playbackRes": res.label()})));
     }
     if let Some(r) = rest.strip_prefix("pausedRes.") {
@@ -947,6 +949,17 @@ mod tests {
         v.zoom = Some(0.1);
         let r = picture_rect(area, 1920.0, 1080.0, &v, 1.0);
         assert!((r.center().x - 200.0).abs() < 1e-3, "a small picture stays centred");
+    }
+
+    #[test]
+    fn every_explicit_resolution_applies_while_playing_and_paused() {
+        for res in PlaybackRes::ALL {
+            let mut view = MonitorView::default();
+            view.res = res;
+            view.paused_res = res;
+            assert_eq!(view.effective_res(true), res);
+            assert_eq!(view.effective_res(false), res);
+        }
     }
 
     #[test]
