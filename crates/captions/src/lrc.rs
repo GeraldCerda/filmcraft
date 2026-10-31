@@ -8,7 +8,8 @@ fn timestamp(value: &str) -> Option<Tick> {
     }
     let minutes: i128 = minutes.parse().ok()?;
     let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
-    if whole.is_empty() || whole.len() > 2 || !whole.bytes().all(|b| b.is_ascii_digit()) || fraction.len() > 3 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+    if whole.is_empty() || whole.len() > 2 || !whole.bytes().all(|b| b.is_ascii_digit()) || fraction.len() > 3 || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
         return None;
     }
     let seconds: i128 = whole.parse().ok()?;
@@ -17,7 +18,8 @@ fn timestamp(value: &str) -> Option<Tick> {
     }
     let scale = 10_i128.pow(fraction.len() as u32);
     let fraction: i128 = if fraction.is_empty() { 0 } else { fraction.parse().ok()? };
-    let ticks = (minutes.checked_mul(60)?.checked_add(seconds)?).checked_mul(TICKS_PER_SECOND as i128)?
+    let ticks = (minutes.checked_mul(60)?.checked_add(seconds)?)
+        .checked_mul(TICKS_PER_SECOND as i128)?
         .checked_add(fraction.checked_mul(TICKS_PER_SECOND as i128)?.checked_div(scale)?)?;
     i64::try_from(ticks).ok().map(Tick)
 }
@@ -68,8 +70,7 @@ pub fn parse(input: &str) -> Result<Document> {
     }
     for idx in 0..merged.len() {
         let next = merged.get(idx + 1).map(|c| c.start);
-        merged[idx].end = next.filter(|end| *end > merged[idx].start)
-            .unwrap_or_else(|| Tick(merged[idx].start.0.saturating_add(3 * TICKS_PER_SECOND)));
+        merged[idx].end = next.filter(|end| *end > merged[idx].start).unwrap_or_else(|| Tick(merged[idx].start.0.saturating_add(3 * TICKS_PER_SECOND)));
     }
     let mut doc = Document { cues: merged, ..Document::default() };
     doc.normalize();
