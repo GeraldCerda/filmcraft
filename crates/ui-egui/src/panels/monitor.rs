@@ -1135,6 +1135,21 @@ mod tests {
     }
 
     #[test]
+    fn explicit_resolution_scales_do_not_collapse_to_the_monitor_size() {
+        let resolutions = [
+            (PlaybackRes::Full, 1.0),
+            (PlaybackRes::Half, 0.5),
+            (PlaybackRes::Quarter, 0.25),
+            (PlaybackRes::Eighth, 0.125),
+            (PlaybackRes::Sixteenth, 0.0625),
+        ];
+        for (resolution, expected) in resolutions {
+            assert_eq!(quantize_scale(resolution.scale()), expected);
+        }
+        assert_ne!(quantize_scale(PlaybackRes::Half.scale()), quantize_scale(PlaybackRes::Quarter.scale()));
+    }
+
+    #[test]
     fn button_editor_updates_visibility_without_affecting_other_monitor() {
         let mut program = crate::state::MonitorView::default().transport_hidden;
         let source = program.clone();
