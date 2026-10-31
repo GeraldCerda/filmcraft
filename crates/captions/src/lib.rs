@@ -18,8 +18,8 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod burn;
-pub mod lrc;
 pub mod cea608;
+pub mod lrc;
 pub mod mcc;
 pub mod scc;
 pub mod srt;
