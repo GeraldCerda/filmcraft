@@ -415,6 +415,12 @@ fn with_extension(path: &str, settings: &ExportSettings) -> String {
         {
             path.to_string()
         }
+        Some(existing)
+            if filmcraft_media::VIDEO_EXTENSIONS.iter().chain(filmcraft_media::AUDIO_EXTENSIONS).any(|known| known.eq_ignore_ascii_case(existing))
+                || ["mp4", "mov", "mxf", "webm", "avi", "wav", "flac", "aac", "aiff", "aif", "png", "jpg", "jpeg", "tif", "tiff"].iter().any(|known| known.eq_ignore_ascii_case(existing)) =>
+        {
+            Path::new(path).with_extension(ext).to_string_lossy().to_string()
+        }
         Some(_) if settings.is_image_sequence() || matches!(settings.format, Format::Aiff) => format!("{}.{ext}", path.rsplit_once('.').map_or(path, |x| x.0)),
         _ => format!("{path}.{ext}"),
     }
