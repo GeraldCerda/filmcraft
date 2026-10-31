@@ -1326,6 +1326,14 @@ mod guard_tests {
     use super::*;
 
     #[test]
+    fn media_export_extensions_replace_existing_media_suffixes() {
+        let settings = ExportSettings::default();
+        assert_eq!(with_extension("/tmp/sequence.mov", &settings), "/tmp/sequence.mp4");
+        assert_eq!(with_extension("/tmp/sequence.mp4", &settings), "/tmp/sequence.mp4");
+        assert_eq!(with_extension("/tmp/sequence.v2", &settings), "/tmp/sequence.v2.mp4");
+    }
+
+    #[test]
     fn export_queue_round_trips_with_interrupted_items() {
         let dir = std::env::temp_dir().join(format!("filmcraft-export-queue-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
