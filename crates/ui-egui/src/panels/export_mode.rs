@@ -1530,8 +1530,8 @@ pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::P
         // a file name goes in the shown folder; a typed or pasted path replaces both
         app.ui.export.quick_path = if v.contains(['/', '\\']) { v } else { std::path::Path::new(&folder).join(v.trim()).to_string_lossy().to_string() };
     }
-    if browse && let Some(p) = app.hooks.pick_save_as.as_mut().and_then(|f| f(format, &[ext], &app.ui.export.quick_path)) {
-        app.ui.export.quick_path = p;
+    if browse && let Some(folder) = app.hooks.pick_folder.as_mut().and_then(|f| f()) {
+        app.ui.export.quick_path = std::path::Path::new(&folder).join(file_name).to_string_lossy().to_string();
     }
     if go {
         let p = json!({"preset": app.ui.export.quick_preset, "path": app.ui.export.quick_path});
