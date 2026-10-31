@@ -9,16 +9,24 @@ app_path="${1:-/Applications/FilmCraft.app}"
 if [ ! -d "$app_path" ] && [ "$app_path" = /Applications/FilmCraft.app ] && [ -d "$HOME/Applications/FilmCraft.app" ]; then
     app_path="$HOME/Applications/FilmCraft.app"
 fi
+fresh=0
 if [ ! -d "$app_path/Contents/MacOS" ]; then
-    printf 'FilmCraft was not found. Run bash packaging/macos/install-custom.sh followed by the full path to your FilmCraft.app.\n' >&2
-    exit 1
+    if [ -e "$app_path" ]; then
+        printf 'The selected path exists but is not a valid FilmCraft.app bundle.\n' >&2
+        exit 1
+    fi
+    fresh=1
 fi
 app_path="$(cd "$(dirname "$app_path")" && pwd)/$(basename "$app_path")"
-executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")"
-case "$executable" in
-    FilmCraft|filmcraft) ;;
-    *) printf 'The selected app is not a recognized FilmCraft bundle.\n' >&2; exit 1 ;;
-esac
+if [ "$fresh" = 1 ]; then
+    executable="FilmCraft"
+else
+    executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Contents/Info.plist")"
+    case "$executable" in
+        FilmCraft|filmcraft) ;;
+        *) printf 'The selected app is not a recognized FilmCraft bundle.\n' >&2; exit 1 ;;
+    esac
+fi
 if ! xcode-select -p >/dev/null 2>&1; then
     xcode-select --install
     printf 'Finish installing Apple Command Line Tools, then run this installer again.\n'
@@ -70,7 +78,16 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-run_install ditto "$app_path" "$stage_app"
+if [ "$fresh" = 1 ]; then
+    run_install mkdir -p "$stage_app/Contents/MacOS" "$stage_app/Contents/Resources"
+    run_install cp "$source_dir/assets/app-icon/filmcraft.icns" "$stage_app/Contents/Resources/FilmCraft.icns"
+    sed -e 's/@VERSION@/0.7.2/g' -e 's/@SHORT_VERSION@/0.7.2/g' -e 's/@BUILD_SHA@/custom/g' "$source_dir/packaging/macos/Info.plist.in" >"$build_dir/Info.plist"
+    printf 'APPL????' >"$build_dir/PkgInfo"
+    run_install cp "$build_dir/Info.plist" "$stage_app/Contents/Info.plist"
+    run_install cp "$build_dir/PkgInfo" "$stage_app/Contents/PkgInfo"
+else
+    run_install ditto "$app_path" "$stage_app"
+fi
 run_install cp "$build_dir/release/filmcraft" "$stage_app/Contents/MacOS/$executable"
 run_install chmod 755 "$stage_app/Contents/MacOS/$executable"
 run_install /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 0.7.2' "$stage_app/Contents/Info.plist"
@@ -80,9 +97,13 @@ run_install /usr/libexec/PlistBuddy -c 'Add :FilmCraftVersion string 0.7.2-custo
 run_install codesign --force --deep --sign - --entitlements "$source_dir/packaging/macos/entitlements.plist" "$stage_app"
 run_install codesign --verify --deep --strict "$stage_app"
 if [ -e "$backup_path" ]; then printf 'Backup path already exists. No app replaced.\n' >&2; exit 1; fi
-original_moved=1
-run_install mv "$app_path" "$backup_path"
+backup_note="none (fresh installation)"
+if [ "$fresh" = 0 ]; then
+    original_moved=1
+    run_install mv "$app_path" "$backup_path"
+    backup_note="$backup_path"
+fi
 run_install mv "$stage_app" "$app_path"
 installed=1
-printf 'Installed: %s\nBackup: %s\n' "$app_path" "$backup_path"
+printf 'Installed: %s\nBackup: %s\n' "$app_path" "$backup_note"
 open "$app_path"
