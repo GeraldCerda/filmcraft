@@ -139,6 +139,8 @@ fn new_sequence_params(d: &SequenceSettingsDraft) -> (Map<String, Value>, Map<St
     }
     p.insert("matchFirstVideo".into(), json!(d.match_first_video));
     p.insert("fillFrame".into(), json!(d.fill_frame));
+    p.insert("dropFrame".into(), json!(d.drop_frame && rate(d).supports_drop_frame()));
+    p.insert("maxRenderQuality".into(), json!(d.max_render_quality));
     p.insert("width".into(), json!(d.width));
     p.insert("height".into(), json!(d.height));
     p.insert("fps".into(), json!(rate(d).as_f64()));
@@ -146,19 +148,7 @@ fn new_sequence_params(d: &SequenceSettingsDraft) -> (Map<String, Value>, Map<St
     p.insert("mix".into(), json!(d.mix));
     p.insert("video".into(), json!(d.video_tracks.min(256)));
     p.insert("audio".into(), json!(d.audio_tracks.min(256)));
-    // what's left: only the settings `file.newSequence` has no parameter for
-    let after = SequenceSettings {
-        match_first_video: d.match_first_video,
-        fill_frame: d.fill_frame,
-        frame_rate: rate(d),
-        width: d.width,
-        height: d.height,
-        sample_rate: d.sample_rate,
-        ..Default::default()
-    };
-    let mut rest = changes(d, &after, name);
-    rest.retain(|k, _| matches!(k.as_str(), "dropFrame" | "maxRenderQuality"));
-    (p, rest)
+    (p, Map::new())
 }
 
 /// The Tracks tab of New Sequence: how many video and audio tracks the sequence starts with.
@@ -659,7 +649,7 @@ mod tests {
         let (p, rest) = new_sequence_params(&d);
         assert_eq!(
             Value::Object(p),
-            json!({"name":"Shorts","width":1080,"height":1920,"fps":24_000.0/1001.0,"sampleRate":48_000,"mix":"Stereo","video":2,"audio":4,"matchFirstVideo":true,"fillFrame":true})
+            json!({"name":"Shorts","width":1080,"height":1920,"fps":24_000.0/1001.0,"sampleRate":48_000,"mix":"Stereo","video":2,"audio":4,"matchFirstVideo":true,"fillFrame":true,"dropFrame":false,"maxRenderQuality":false})
         );
         assert!(rest.is_empty(), "everything else is the default: {rest:?}");
         // what file.newSequence has no parameter for follows on the new sequence; a blank name
@@ -675,7 +665,9 @@ mod tests {
         };
         let (p, rest) = new_sequence_params(&d);
         assert!(p.get("name").is_none());
-        assert_eq!(Value::Object(rest), json!({"dropFrame":true,"maxRenderQuality":true}));
+        assert_eq!(p.get("dropFrame"), Some(&json!(true)));
+        assert_eq!(p.get("maxRenderQuality"), Some(&json!(true)));
+        assert!(rest.is_empty());
     }
 
     #[test]
