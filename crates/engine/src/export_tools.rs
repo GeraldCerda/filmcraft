@@ -649,19 +649,106 @@ pub struct QueueItem {
 }
 
 /// The export queue (session state).
+#[derive(Serialize, Deserialize)]
+struct SavedQueueItem {
+    id: u64,
+    sequence: ItemId,
+    sequence_name: String,
+    preset: String,
+    settings: ExportSettings,
+    status: QueueStatus,
+    error: Option<String>,
+    project: Project,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedQueue {
+    version: u32,
+    next_id: u64,
+    quick_preset: Option<String>,
+    items: Vec<SavedQueueItem>,
+}
+
 #[derive(Default)]
 pub struct ExportQueue {
     pub items: Vec<QueueItem>,
-    /// Started: ready items are encoded one after another.
     pub running: bool,
     next_id: u64,
-    /// Quick Export's preset (the last one used).
     pub quick_preset: Option<String>,
+    storage_path: Option<PathBuf>,
 }
 
 impl ExportQueue {
     pub fn is_active(&self) -> bool {
         self.items.iter().any(|i| i.status == QueueStatus::Encoding) || (self.running && self.items.iter().any(|i| i.status == QueueStatus::Ready))
+    }
+
+    pub fn set_dir(&mut self, dir: &Path) {
+        let path = dir.join("export-queue.json");
+        self.storage_path = Some(path.clone());
+        let Ok(bytes) = std::fs::read(&path) else { return };
+        let saved = match serde_json::from_slice::<SavedQueue>(&bytes) {
+            Ok(saved) if saved.version == 1 => saved,
+            Ok(saved) => {
+                log::warn!("Unsupported export queue version {} at {}", saved.version, path.display());
+                return;
+            }
+            Err(error) => {
+                log::warn!("Cannot restore export queue from {}: {error}", path.display());
+                return;
+            }
+        };
+        self.next_id = saved.next_id.max(saved.items.iter().map(|item| item.id).max().unwrap_or(0));
+        self.quick_preset = saved.quick_preset;
+        self.items = saved
+            .items
+            .into_iter()
+            .map(|item| {
+                let interrupted = item.status == QueueStatus::Encoding;
+                QueueItem {
+                    id: item.id,
+                    sequence: item.sequence,
+                    sequence_name: item.sequence_name,
+                    preset: item.preset,
+                    settings: item.settings,
+                    status: if interrupted { QueueStatus::Failed } else { item.status },
+                    job: None,
+                    error: if interrupted { Some("Export interrupted by application shutdown; retry to restart".into()) } else { item.error },
+                    project: Arc::new(item.project),
+                }
+            })
+            .collect();
+    }
+
+    pub fn persist(&self) -> std::io::Result<()> {
+        let Some(path) = &self.storage_path else { return Ok(()) };
+        let saved = SavedQueue {
+            version: 1,
+            next_id: self.next_id,
+            quick_preset: self.quick_preset.clone(),
+            items: self
+                .items
+                .iter()
+                .map(|item| SavedQueueItem {
+                    id: item.id,
+                    sequence: item.sequence,
+                    sequence_name: item.sequence_name.clone(),
+                    preset: item.preset.clone(),
+                    settings: item.settings.clone(),
+                    status: item.status,
+                    error: item.error.clone(),
+                    project: (*item.project).clone(),
+                })
+                .collect(),
+        };
+        let bytes = serde_json::to_vec(&saved).map_err(|error| std::io::Error::other(error.to_string()))?;
+        filmcraft_format::atomic_write(path, &bytes).map_err(|error| std::io::Error::other(error.to_string()))
+    }
+}
+
+fn persist_queue(s: &Session) {
+    if let Err(error) = s.export_queue.persist() {
+        log::warn!("Could not save export queue: {error}");
     }
 }
 
@@ -731,10 +818,14 @@ pub fn pump_queue(s: &mut Session, wait: bool) {
             finished_any = true;
         }
         if s.export_queue.items.iter().any(|i| i.status == QueueStatus::Encoding) || !s.export_queue.running {
+            if finished_any {
+                persist_queue(s);
+            }
             return;
         }
         let Some(i) = s.export_queue.items.iter().position(|i| i.status == QueueStatus::Ready) else {
             s.export_queue.running = false;
+            persist_queue(s);
             if finished_any || !wait {
                 let failed = s.export_queue.items.iter().filter(|i| i.status == QueueStatus::Failed).count();
                 let message = if failed > 0 { format!("Export queue finished ({failed} failed)") } else { "Export queue finished".into() };
@@ -757,6 +848,7 @@ pub fn pump_queue(s: &mut Session, wait: bool) {
                 x.error = Some(e.to_string());
             }
         }
+        persist_queue(s);
         if !wait {
             return;
         }
@@ -1232,6 +1324,34 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod guard_tests {
     use super::*;
+
+    #[test]
+    fn export_queue_round_trips_with_interrupted_items() {
+        let dir = std::env::temp_dir().join(format!("filmcraft-export-queue-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut queue = ExportQueue::default();
+        queue.set_dir(&dir);
+        queue.items.push(QueueItem {
+            id: 42,
+            sequence: ItemId(12),
+            sequence_name: "Sequence".into(),
+            preset: "Default".into(),
+            settings: ExportSettings::default(),
+            status: QueueStatus::Encoding,
+            job: Some(123),
+            error: None,
+            project: Arc::new(Project::default()),
+        });
+        queue.persist().unwrap();
+        let mut restored = ExportQueue::default();
+        restored.set_dir(&dir);
+        assert_eq!(restored.next_id, 42);
+        assert_eq!(restored.items.len(), 1);
+        assert_eq!(restored.items[0].status, QueueStatus::Failed);
+        assert!(restored.items[0].error.as_deref().is_some_and(|error| error.contains("interrupted")));
+        assert!(restored.items[0].job.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A panicking job body must leave the job finished with an error, not "running" forever.
     #[test]
