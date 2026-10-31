@@ -15,8 +15,8 @@ fn timestamp(value: &str) -> Option<Tick> {
     if seconds >= 60 {
         return None;
     }
-    let fraction: i128 = if fraction.is_empty() { 0 } else { fraction.parse().ok()? };
     let scale = 10_i128.pow(fraction.len() as u32);
+    let fraction: i128 = if fraction.is_empty() { 0 } else { fraction.parse().ok()? };
     let ticks = (minutes.checked_mul(60)?.checked_add(seconds)?).checked_mul(TICKS_PER_SECOND as i128)?
         .checked_add(fraction.checked_mul(TICKS_PER_SECOND as i128)?.checked_div(scale)?)?;
     i64::try_from(ticks).ok().map(Tick)
@@ -53,12 +53,25 @@ pub fn parse(input: &str) -> Result<Document> {
         return Err(Error::NotFormat("LRC"));
     }
     cues.sort_by_key(|c| c.start);
-    for idx in 0..cues.len() {
-        let next = cues.get(idx + 1).map(|c| c.start);
-        cues[idx].end = next.filter(|end| *end > cues[idx].start)
-            .unwrap_or_else(|| Tick(cues[idx].start.0.saturating_add(3 * TICKS_PER_SECOND)));
+    let mut merged: Vec<Cue> = Vec::with_capacity(cues.len());
+    for cue in cues {
+        if let Some(last) = merged.last_mut()
+            && last.start == cue.start
+        {
+            if !last.text.lines().any(|line| line == cue.text) {
+                last.text.push('\n');
+                last.text.push_str(&cue.text);
+            }
+            continue;
+        }
+        merged.push(cue);
     }
-    let mut doc = Document { cues, ..Document::default() };
+    for idx in 0..merged.len() {
+        let next = merged.get(idx + 1).map(|c| c.start);
+        merged[idx].end = next.filter(|end| *end > merged[idx].start)
+            .unwrap_or_else(|| Tick(merged[idx].start.0.saturating_add(3 * TICKS_PER_SECOND)));
+    }
+    let mut doc = Document { cues: merged, ..Document::default() };
     doc.normalize();
     Ok(doc)
 }
@@ -70,7 +83,9 @@ pub fn write(doc: &Document) -> String {
         let minutes = centiseconds / 6000;
         let seconds = centiseconds / 100 % 60;
         let fraction = centiseconds % 100;
-        output.push_str(&format!("[{minutes:02}:{seconds:02}.{fraction:02}]{}\n", cue.text.replace('\n', " ")));
+        for line in cue.text.lines().filter(|line| !line.is_empty()) {
+            output.push_str(&format!("[{minutes:02}:{seconds:02}.{fraction:02}]{line}\n"));
+        }
     }
     output
 }
@@ -93,6 +108,22 @@ mod tests {
     fn rejects_metadata_only_and_malformed_timestamps() {
         assert!(parse("[ar:Artist]").is_err());
         assert!(parse("[00:80.00]Bad").is_err());
+    }
+
+    #[test]
+    fn duplicate_times_preserve_all_lyrics() {
+        let doc = parse("[00:01.00][00:03.00]First\n[00:03.00]Second").unwrap();
+        assert_eq!(doc.cues.len(), 2);
+        assert_eq!(doc.cues[1].text, "First\nSecond");
+        let copy = parse(&write(&doc)).unwrap();
+        assert_eq!(copy.cues[1].text, doc.cues[1].text);
+    }
+
+    #[test]
+    fn fractional_precision_and_negative_offset() {
+        let doc = parse("[offset:-500]\n[00:01.125]First\n[00:02.5]Second").unwrap();
+        assert_eq!(doc.cues[0].start, Tick(TICKS_PER_SECOND * 5 / 8));
+        assert_eq!(doc.cues[1].start, Tick(TICKS_PER_SECOND * 2));
     }
 
     #[test]
