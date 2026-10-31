@@ -592,6 +592,7 @@ impl Session {
         self.shortcuts.set_dir(&cfg.data_dir);
         self.presets.set_dir(&cfg.data_dir);
         self.export_presets.set_dir(&cfg.data_dir);
+        self.export_queue.set_dir(&cfg.data_dir);
         self.prefs_path = Some(prefs_path);
         self.apply_media_cache();
         self.persistence = Some(autosave::Persistence::start(&cfg, self.prefs.auto_save.clone())?);
@@ -603,6 +604,9 @@ impl Session {
     /// the next launch); otherwise the session's journal directory is removed.
     pub fn shutdown(&mut self) {
         self.sync_persistence();
+        if let Err(error) = self.export_queue.persist() {
+            log::warn!("Could not save export queue during shutdown: {error}");
+        }
         if let Some(p) = self.persistence.take() {
             p.close();
         }
@@ -732,6 +736,11 @@ impl Session {
             self.log.push(panels::Level::Error, id, e.to_string());
         }
         self.sync_persistence();
+        if r.is_ok() && (id == "export.quick" || (id.starts_with("export.queue.") && id != "export.queue.list"))
+            && let Err(error) = self.export_queue.persist()
+        {
+            self.log.push(panels::Level::Warning, id, format!("Could not save the export queue: {error}"));
+        }
         // playback reads the newest snapshot (mixer moves, mutes… are heard while playing)
         self.previews.live.publish_project(self.project.clone());
         if r.is_ok() && spec.journal {
