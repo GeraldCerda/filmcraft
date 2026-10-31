@@ -1464,8 +1464,7 @@ pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::P
     }
     let preset = app.session.export_presets.find(&app.ui.export.quick_preset);
     let ext = preset.as_ref().map(|p| p.settings.extension()).unwrap_or("mp4");
-    let format = preset.as_ref().map(|p| p.settings.format.label()).unwrap_or("MP4");
-    let seq_name = app.session.project.item(seq).map(|i| i.name.clone()).unwrap_or_else(|| "Sequence".into());
+     let seq_name = app.session.project.item(seq).map(|i| i.name.clone()).unwrap_or_else(|| "Sequence".into());
     if let Some(p) = quick_file(app, &app.ui.export.quick_path, &seq_name, ext) {
         app.ui.export.quick_path = p;
     }
