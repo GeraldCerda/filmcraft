@@ -201,9 +201,6 @@ fn apply_cache_choice(session: &mut Session, choice: Option<std::path::PathBuf>,
             Err(error) => log::warn!("could not create FilmCraft cache in {}: {error}", folder.display()),
         }
     }
-    session.prefs.media_cache.location.clear();
-    session.prefs.media_cache.database_location.clear();
-    session.apply_media_cache();
     false
 }
 
@@ -557,7 +554,7 @@ mod tests {
         let before = session.shortcuts.bindings.clone();
         session.prefs.media_cache.location = "/offline-volume/FilmCraft Cache".into();
         assert!(!super::apply_cache_choice(&mut session, None, "custom-version"));
-        assert!(session.prefs.media_cache.location.is_empty());
+        assert_eq!(session.prefs.media_cache.location, "/offline-volume/FilmCraft Cache");
         assert!(session.prefs.media_cache.setup_version.is_empty());
         assert_eq!(session.shortcuts.bindings, before);
         let dir = std::env::temp_dir().join(format!("filmcraft-cache-startup-{}", std::process::id()));
