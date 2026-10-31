@@ -176,9 +176,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         ui.painter().rect_filled(pic, 0.0, t.monitor_bg);
         let playing = if which == Which::Program { app.playback.playing } else { app.source_playback.clock.playing };
         let res = mv.effective_res(playing);
-        // frame pixels per screen pixel along the axis that needs the most of them
-        let screen_scale = (pic.width() * ppp / frame_size.0.max(1) as f32).max(pic.height() * ppp / frame_size.1.max(1) as f32).min(1.0);
-        let scale = quantize_scale(res.scale().min(screen_scale.max(1.0 / 32.0)));
+        let scale = quantize_scale(res.scale());
         let frame = rate.frame_at(time);
         let rev = match target {
             Target::Item(i) => app.item_revision(i),
@@ -375,7 +373,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
     egui::Popup::menu(&rresp).show(|ui| {
         for r in PlaybackRes::ALL {
             if ui.selectable_label(r == res, crate::i18n::t(r.label())).clicked() {
-                monitor_view::view_mut(app, which).res = r;
+                let view = monitor_view::view_mut(app, which);
+                view.res = r;
+                view.paused_res = r;
             }
         }
     });
