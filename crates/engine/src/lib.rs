@@ -604,7 +604,7 @@ impl Session {
     /// the next launch); otherwise the session's journal directory is removed.
     pub fn shutdown(&mut self) {
         self.sync_persistence();
-        if let Err(error) = self.export_queue.persist() {
+        if let Err(error) = self.export_queue.persist().and_then(|_| self.export_queue.flush()) {
             log::warn!("Could not save export queue during shutdown: {error}");
         }
         if let Some(p) = self.persistence.take() {
