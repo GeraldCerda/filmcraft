@@ -500,7 +500,13 @@ pub fn default_data_dir() -> Option<PathBuf> {
         return Some(d);
     }
     if cfg!(target_os = "macos") {
-        return env("HOME").map(|h| h.join("Library/Application Support/FilmCraft"));
+        return env("HOME").map(|h| {
+            let app = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().and_then(Path::parent).map(|contents| contents.join("Resources/FilmCraftTestBuild")));
+            let name = if app.is_some_and(|marker| marker.is_file()) { "FilmCraft-Test" } else { "FilmCraft" };
+            h.join("Library/Application Support").join(name)
+        });
     }
     if cfg!(windows) {
         return env("APPDATA").map(|h| h.join("FilmCraft"));
