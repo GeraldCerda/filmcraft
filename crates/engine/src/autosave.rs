@@ -1068,7 +1068,7 @@ mod test_bundle_tests {
         std::fs::create_dir_all(contents.join("Resources")).unwrap();
         let executable = contents.join("MacOS/FilmCraft");
         assert!(!is_test_bundle(&executable));
-        std::fs::write(contents.join("Resources/FilmCraftTestBuild"), []).unwrap();
+        std::fs::write(contents.join("Resources/FilmCraftTestBuild"), b"").unwrap();
         assert!(is_test_bundle(&executable));
         assert!(!is_test_bundle(&root.join("bin/FilmCraft")));
         std::fs::remove_dir_all(root).unwrap();
