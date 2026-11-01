@@ -116,9 +116,7 @@ pub fn route(app: &mut FilmcraftApp, id: &str, params: &Value) -> Option<Result<
     let pfx = prefix(w);
     if let Some(r) = rest.strip_prefix("playbackRes.") {
         let (_, res) = RES_NAMES.iter().find(|(n, _)| *n == r)?;
-        let view = view_mut(app, w);
-        view.res = *res;
-        view.paused_res = *res;
+        view_mut(app, w).res = *res;
         return Some(Ok(json!({"monitor": pfx, "playbackRes": res.label()})));
     }
     if let Some(r) = rest.strip_prefix("pausedRes.") {
@@ -952,14 +950,18 @@ mod tests {
     }
 
     #[test]
-    fn resolution_commands_update_both_monitor_states() {
+    fn playback_and_paused_commands_remain_independent() {
         let mut app = FilmcraftApp::new(filmcraft_engine::Session::default());
         for (name, res) in RES_NAMES {
             let result = route(&mut app, &format!("view.playbackRes.{name}"), &json!({"monitor": "program"}));
             assert!(matches!(result, Some(Ok(_))));
             assert_eq!(app.ui.program.res, res);
-            assert_eq!(app.ui.program.paused_res, res);
+            assert_eq!(app.ui.program.paused_res, PlaybackRes::Full);
         }
+        let result = route(&mut app, "view.pausedRes.quarter", &json!({"monitor": "program"}));
+        assert!(matches!(result, Some(Ok(_))));
+        assert_eq!(app.ui.program.res, PlaybackRes::Sixteenth);
+        assert_eq!(app.ui.program.paused_res, PlaybackRes::Quarter);
     }
 
     #[test]
