@@ -147,13 +147,74 @@ pub fn export_params(app: &FilmcraftApp) -> Value {
     p
 }
 
-fn choose_export_destination(app: &mut FilmcraftApp, command: &'static str, mut params: Value) {
+fn run_export_at_path(app: &mut FilmcraftApp, command: &'static str, mut params: Value, mut path: String) {
     let Some(sequence) = app.session.state.active_sequence else {
         return;
     };
     params["sequence"] = json!(sequence.0);
-    let proposed = params["path"].as_str().unwrap_or("").to_string();
     let settings = match app.session.execute("export.resolve", params.clone()).and_then(|value| {
+        serde_json::from_value::<ExportSettings>(value["settings"].clone()).map_err(|error| filmcraft_engine::EngineError::Other(error.to_string()))
+    }) {
+        Ok(settings) => settings,
+        Err(error) => {
+            app.ui.status = error.to_string();
+            return;
+        }
+    };
+    if command == "export.quick" {
+        let name = app.session.project.item(sequence).map(|item| item.name.as_str()).unwrap_or("Sequence");
+        path = quick_file(app, &path, name, settings.extension()).unwrap_or(path);
+    }
+    params["path"] = json!(path);
+    let resolved = match app.session.execute("export.resolve", params.clone()) {
+        Ok(value) => value["settings"]["path"].as_str().unwrap_or(&path).to_string(),
+        Err(error) => {
+            app.ui.status = error.to_string();
+            return;
+        }
+    };
+    let candidate = std::fs::canonicalize(&resolved).ok();
+    let source = app.session.project.items.values().any(|item| {
+        if let filmcraft_engine::project::ItemKind::Media(media) = &item.kind
+            && let filmcraft_engine::project::MediaRef::File { path } = &media.media
+        {
+            return path == &resolved || candidate.as_ref().is_some_and(|p| std::fs::canonicalize(path).ok().as_ref() == Some(p));
+        }
+        false
+    });
+    if source {
+        app.ui.status = "Choose another filename: the export destination is source media".into();
+        return;
+    }
+    if command == "export.quick" && std::path::Path::new(&resolved).exists() {
+        app.ui.status = "Quick Export destination exists. Choose a different filename to avoid replacing it.".into();
+        return;
+    }
+    params["path"] = json!(resolved);
+    match app.session.execute(command, params) {
+        Ok(value) => {
+            app.ui.status = if command == "export.queue.add" {
+                "Added to the export queue".into()
+            } else {
+                format!("Exporting {}", value["path"].as_str().unwrap_or(""))
+            };
+            if command == "export.quick" {
+                app.ui.export.quick_path = path;
+                app.ui.export.quick_open = false;
+            }
+        }
+        Err(error) => app.ui.status = error.to_string(),
+    }
+}
+
+fn choose_export_destination(app: &mut FilmcraftApp, command: &'static str, params: Value) {
+    let Some(sequence) = app.session.state.active_sequence else {
+        return;
+    };
+    let mut resolved_params = params.clone();
+    resolved_params["sequence"] = json!(sequence.0);
+    let proposed = params["path"].as_str().unwrap_or("").to_string();
+    let settings = match app.session.execute("export.resolve", resolved_params).and_then(|value| {
         serde_json::from_value::<ExportSettings>(value["settings"].clone()).map_err(|error| filmcraft_engine::EngineError::Other(error.to_string()))
     }) {
         Ok(settings) => settings,
@@ -168,44 +229,7 @@ fn choose_export_destination(app: &mut FilmcraftApp, command: &'static str, mut 
             app.ui.status = "Export cancelled".into();
             return;
         };
-        let name = app.session.project.item(sequence).map(|item| item.name.as_str()).unwrap_or("Sequence");
-        let path = if command == "export.quick" { quick_file(app, &path, name, extension).unwrap_or(path) } else { path };
-        params["path"] = json!(path);
-        let resolved = match app.session.execute("export.resolve", params.clone()) {
-            Ok(value) => value["settings"]["path"].as_str().unwrap_or(&path).to_string(),
-            Err(error) => {
-                app.ui.status = error.to_string();
-                return;
-            }
-        };
-        let candidate = std::fs::canonicalize(&resolved).ok();
-        let source = app.session.project.items.values().any(|item| {
-            if let filmcraft_engine::project::ItemKind::Media(media) = &item.kind
-                && let filmcraft_engine::project::MediaRef::File { path } = &media.media
-            {
-                return path == &resolved || candidate.as_ref().is_some_and(|p| std::fs::canonicalize(path).ok().as_ref() == Some(p));
-            }
-            false
-        });
-        if source {
-            app.ui.status = "Choose another filename: the export destination is source media".into();
-            return;
-        }
-        params["path"] = json!(resolved);
-        match app.session.execute(command, params) {
-            Ok(value) => {
-                app.ui.status = if command == "export.queue.add" {
-                    "Added to the export queue".into()
-                } else {
-                    format!("Exporting {}", value["path"].as_str().unwrap_or(""))
-                };
-                if command == "export.quick" {
-                    app.ui.export.quick_path = path;
-                    app.ui.export.quick_open = false;
-                }
-            }
-            Err(error) => app.ui.status = error.to_string(),
-        }
+        run_export_at_path(app, command, params, path);
     });
 }
 
@@ -1534,7 +1558,8 @@ pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::P
     }
     if go {
         let p = json!({"preset": app.ui.export.quick_preset, "path": app.ui.export.quick_path});
-        choose_export_destination(app, "export.quick", p);
+        let path = app.ui.export.quick_path.clone();
+        run_export_at_path(app, "export.quick", p, path);
     }
     if close || crate::widgets::escape_closes(ctx) || (clicked_elsewhere && !toggled) {
         app.ui.export.quick_open = false;
