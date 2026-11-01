@@ -658,7 +658,7 @@ struct SavedQueueItem {
     settings: ExportSettings,
     status: QueueStatus,
     error: Option<String>,
-    project: Project,
+    project: Arc<Project>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -669,6 +669,16 @@ struct SavedQueue {
     items: Vec<SavedQueueItem>,
 }
 
+enum QueueWrite {
+    Snapshot(SavedQueue),
+    Flush(std::sync::mpsc::Sender<std::io::Result<()>>),
+}
+
+fn write_queue_snapshot(path: &Path, snapshot: &SavedQueue) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec(snapshot).map_err(|error| std::io::Error::other(error.to_string()))?;
+    filmcraft_format::atomic_write(path, &bytes)
+}
+
 #[derive(Default)]
 pub struct ExportQueue {
     pub items: Vec<QueueItem>,
@@ -676,6 +686,7 @@ pub struct ExportQueue {
     next_id: u64,
     pub quick_preset: Option<String>,
     storage_path: Option<PathBuf>,
+    writer: Option<std::sync::mpsc::Sender<QueueWrite>>,
 }
 
 impl ExportQueue {
@@ -686,42 +697,77 @@ impl ExportQueue {
     pub fn set_dir(&mut self, dir: &Path) {
         let path = dir.join("export-queue.json");
         self.storage_path = Some(path.clone());
-        let Ok(bytes) = std::fs::read(&path) else { return };
-        let saved = match serde_json::from_slice::<SavedQueue>(&bytes) {
-            Ok(saved) if saved.version == 1 => saved,
-            Ok(saved) => {
-                log::warn!("Unsupported export queue version {} at {}", saved.version, path.display());
-                return;
-            }
-            Err(error) => {
-                log::warn!("Cannot restore export queue from {}: {error}", path.display());
-                return;
-            }
-        };
-        self.next_id = saved.next_id.max(saved.items.iter().map(|item| item.id).max().unwrap_or(0));
-        self.quick_preset = saved.quick_preset;
-        self.items = saved
-            .items
-            .into_iter()
-            .map(|item| {
-                let interrupted = item.status == QueueStatus::Encoding;
-                QueueItem {
-                    id: item.id,
-                    sequence: item.sequence,
-                    sequence_name: item.sequence_name,
-                    preset: item.preset,
-                    settings: item.settings,
-                    status: if interrupted { QueueStatus::Failed } else { item.status },
-                    job: None,
-                    error: if interrupted { Some("Export interrupted by application shutdown; retry to restart".into()) } else { item.error },
-                    project: Arc::new(item.project),
+        if let Ok(bytes) = std::fs::read(&path) {
+            match serde_json::from_slice::<SavedQueue>(&bytes) {
+                Ok(saved) if saved.version == 1 => {
+                    self.next_id = saved.next_id.max(saved.items.iter().map(|item| item.id).max().unwrap_or(0));
+                    self.quick_preset = saved.quick_preset;
+                    self.items = saved
+                        .items
+                        .into_iter()
+                        .map(|item| {
+                            let interrupted = item.status == QueueStatus::Encoding;
+                            QueueItem {
+                                id: item.id,
+                                sequence: item.sequence,
+                                sequence_name: item.sequence_name,
+                                preset: item.preset,
+                                settings: item.settings,
+                                status: if interrupted { QueueStatus::Failed } else { item.status },
+                                job: None,
+                                error: if interrupted { Some("Export interrupted by application shutdown; retry to restart".into()) } else { item.error },
+                                project: item.project,
+                            }
+                        })
+                        .collect();
                 }
-            })
-            .collect();
+                Ok(saved) => log::warn!("Unsupported export queue version {} at {}", saved.version, path.display()),
+                Err(error) => log::warn!("Cannot restore export queue from {}: {error}", path.display()),
+            }
+        }
+        let (sender, receiver) = std::sync::mpsc::channel::<QueueWrite>();
+        match std::thread::Builder::new().name("filmcraft-export-queue".into()).spawn(move || {
+            while let Ok(message) = receiver.recv() {
+                match message {
+                    QueueWrite::Snapshot(mut latest) => {
+                        let mut barrier = None;
+                        while let Ok(next) = receiver.try_recv() {
+                            match next {
+                                QueueWrite::Snapshot(snapshot) => latest = snapshot,
+                                QueueWrite::Flush(tx) => {
+                                    barrier = Some(tx);
+                                    break;
+                                }
+                            }
+                        }
+                        let result = write_queue_snapshot(&path, &latest);
+                        if let Some(tx) = barrier {
+                            let _ = tx.send(result);
+                        } else if let Err(error) = result {
+                            log::warn!("Could not persist export queue: {error}");
+                        }
+                    }
+                    QueueWrite::Flush(tx) => {
+                        let _ = tx.send(Ok(()));
+                    }
+                }
+            }
+        }) {
+            Ok(_) => self.writer = Some(sender),
+            Err(error) => {
+                self.writer = None;
+                log::warn!("Could not start export queue persistence worker: {error}");
+            }
+        }
     }
 
     pub fn persist(&self) -> std::io::Result<()> {
-        let Some(path) = &self.storage_path else { return Ok(()) };
+        if self.storage_path.is_none() {
+            return Ok(());
+        }
+        let Some(writer) = &self.writer else {
+            return Err(std::io::Error::other("export queue persistence worker unavailable"));
+        };
         let saved = SavedQueue {
             version: 1,
             next_id: self.next_id,
@@ -737,12 +783,20 @@ impl ExportQueue {
                     settings: item.settings.clone(),
                     status: item.status,
                     error: item.error.clone(),
-                    project: (*item.project).clone(),
+                    project: Arc::clone(&item.project),
                 })
                 .collect(),
         };
-        let bytes = serde_json::to_vec(&saved).map_err(|error| std::io::Error::other(error.to_string()))?;
-        filmcraft_format::atomic_write(path, &bytes).map_err(|error| std::io::Error::other(error.to_string()))
+        writer.send(QueueWrite::Snapshot(saved)).map_err(|_| std::io::Error::other("export queue persistence worker disconnected"))
+    }
+
+    pub fn flush(&self) -> std::io::Result<()> {
+        let Some(writer) = &self.writer else {
+            return if self.storage_path.is_none() { Ok(()) } else { Err(std::io::Error::other("export queue persistence worker unavailable")) };
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        writer.send(QueueWrite::Flush(tx)).map_err(|_| std::io::Error::other("export queue persistence worker disconnected"))?;
+        rx.recv().map_err(|_| std::io::Error::other("export queue flush interrupted"))?
     }
 }
 
@@ -1358,6 +1412,7 @@ mod guard_tests {
             project: Arc::new(Project::default()),
         });
         queue.persist().unwrap();
+        queue.flush().unwrap();
         let mut restored = ExportQueue::default();
         restored.set_dir(&dir);
         assert_eq!(restored.next_id, 42);
