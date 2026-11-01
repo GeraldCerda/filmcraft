@@ -80,12 +80,12 @@ pub fn parse(input: &str) -> Result<Document> {
 pub fn write(doc: &Document) -> String {
     let mut output = String::new();
     for cue in &doc.cues {
-        let centiseconds = (i128::from(cue.start.0.max(0)) * 100 / i128::from(TICKS_PER_SECOND)) as u64;
-        let minutes = centiseconds / 6000;
-        let seconds = centiseconds / 100 % 60;
-        let fraction = centiseconds % 100;
+        let milliseconds = (i128::from(cue.start.0.max(0)) * 1000 / i128::from(TICKS_PER_SECOND)) as u64;
+        let minutes = milliseconds / 60_000;
+        let seconds = milliseconds / 1000 % 60;
+        let fraction = milliseconds % 1000;
         for line in cue.text.lines().filter(|line| !line.is_empty()) {
-            output.push_str(&format!("[{minutes:02}:{seconds:02}.{fraction:02}]{line}\n"));
+            output.push_str(&format!("[{minutes:02}:{seconds:02}.{fraction:03}]{line}\n"));
         }
     }
     output
@@ -125,6 +125,17 @@ mod tests {
         let doc = parse("[offset:-500]\n[00:01.125]First\n[00:02.5]Second").unwrap();
         assert_eq!(doc.cues[0].start, Tick(TICKS_PER_SECOND * 5 / 8));
         assert_eq!(doc.cues[1].start, Tick(TICKS_PER_SECOND * 2));
+    }
+
+    #[test]
+    fn millisecond_precision_survives_lyric_export() {
+        let original = parse("[00:01.125]Hold\n[00:02.999]On").unwrap();
+        let exported = write(&original);
+        assert!(exported.contains("[00:01.125]Hold"));
+        assert!(exported.contains("[00:02.999]On"));
+        let imported = parse(&exported).unwrap();
+        assert_eq!(imported.cues[0].start, original.cues[0].start);
+        assert_eq!(imported.cues[1].start, original.cues[1].start);
     }
 
     #[test]
