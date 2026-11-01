@@ -353,7 +353,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
     let zresp = crate::widgets::dropdown_text(ui, zr, &zoom_label, &t, egui::Id::new((prefix, "zoom")));
     app.auto.add(&format!("{prefix}.zoom"), zr, "Select Zoom Level");
     monitor_view::zoom_menu(app, &zresp, which);
-    let res = mv.res;
+    let playing = if which == Which::Program { app.playback.playing } else { app.source_playback.clock.playing };
+    let res = mv.effective_res(playing);
     let resolution_x = if stacked_controls && which == Which::Source && !separate_source_drag {
         row1.max.x - 90.0
     } else if stacked_controls {
@@ -369,7 +370,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         crate::panels::source_drag::controls(app, ui, Rect::from_min_size(pos2(row1.center().x - 52.0, settings_y + 26.0), vec2(104.0, 24.0)));
     }
     let rresp = crate::widgets::dropdown_text(ui, rr, crate::i18n::t(res.label()), &t, egui::Id::new((prefix, "res")));
-    app.auto.add(&format!("{prefix}.resolution"), rr, "Select Playback Resolution");
+    app.auto.add(&format!("{prefix}.resolution"), rr, "Select Preview Resolution");
     egui::Popup::menu(&rresp).show(|ui| {
         for r in PlaybackRes::ALL {
             if ui.selectable_label(r == res, crate::i18n::t(r.label())).clicked() {
