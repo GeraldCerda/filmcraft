@@ -1196,7 +1196,7 @@ fn build() -> Vec<CommandSpec> {
             "Sequence…",
             ["File", "New"],
             Some("Cmd+N"),
-            r#"{"name":str,"width":u32=1920,"height":u32=1080,"fps":f64=23.976,"sampleRate":u32=48000,"video":n=3,"audio":n=3,"mix":"Stereo|Mono|5.1|Adaptive"?,"trackType":"Standard|Mono|5.1|Adaptive"?,"fromItem":itemId?,"fromItems":[itemId]?,"matchFirstVideo":bool?,"fillFrame":bool?}"#,
+            r#"{"name":str,"width":u32=1920,"height":u32=1080,"fps":f64=23.976,"sampleRate":u32=48000,"video":n=3,"audio":n=3,"mix":"Stereo|Mono|5.1|Adaptive"?,"trackType":"Standard|Mono|5.1|Adaptive"?,"fromItem":itemId?,"fromItems":[itemId]?,"matchFirstVideo":bool?,"fillFrame":bool?,"dropFrame":bool?,"maxRenderQuality":bool?}"#,
             always,
             |s, p| s.edit_group("New Sequence", |s| {
                 // `fromItems` is `fromItem` for a list: the first sets the sequence, the rest follow it back to back
@@ -1240,6 +1240,12 @@ fn build() -> Vec<CommandSpec> {
                 st.match_first_video =
                     bool_p(p, "matchFirstVideo").unwrap_or(from_ids.is_empty() && !["width", "height", "fps"].iter().any(|key| p.get(key).is_some()));
                 st.fill_frame = bool_p(p, "fillFrame").unwrap_or(true);
+                if let Some(drop_frame) = p.get("dropFrame").and_then(Value::as_bool) {
+                    st.drop_frame = drop_frame && st.frame_rate.supports_drop_frame();
+                }
+                if let Some(quality) = p.get("maxRenderQuality").and_then(Value::as_bool) {
+                    st.max_render_quality = quality;
+                }
                 st.preset = format!("{}x{} {}", st.width, st.height, st.frame_rate.label());
                 st.validate().map_err(|e| bad("file.newSequence", e))?;
                 let nv = checked_u32_p(p, "video", "file.newSequence")?.unwrap_or(3);

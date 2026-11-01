@@ -186,6 +186,10 @@ fn native_options(agent: bool) -> eframe::NativeOptions {
 
 /// Creates the app once eframe has its window and graphics device; sets `created` when it runs,
 /// and confirms the graphics mode once two frames have painted.
+fn cache_setup_needed(location: &str, control_input_only: bool) -> bool {
+    !control_input_only && (location.trim().is_empty() || !std::path::Path::new(location).is_dir())
+}
+
 fn apply_cache_choice(session: &mut Session, choice: Option<std::path::PathBuf>, setup_version: &str) -> bool {
     if let Some(folder) = choice {
         let cache = folder.join("FilmCraft Cache");
@@ -201,9 +205,6 @@ fn apply_cache_choice(session: &mut Session, choice: Option<std::path::PathBuf>,
             Err(error) => log::warn!("could not create FilmCraft cache in {}: {error}", folder.display()),
         }
     }
-    session.prefs.media_cache.location.clear();
-    session.prefs.media_cache.database_location.clear();
-    session.apply_media_cache();
     false
 }
 
@@ -234,8 +235,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             }
         }
         let setup_version = format!("{}-custom-sequence-1", env!("CARGO_PKG_VERSION"));
-        let setup_needed = !control_input_only
-            && (session.prefs.media_cache.setup_version != setup_version || !std::path::Path::new(&session.prefs.media_cache.location).is_dir());
+        let setup_needed = cache_setup_needed(&session.prefs.media_cache.location, control_input_only);
         let cache_configured = if setup_needed {
             let choice = rfd::FileDialog::new().set_title("Choose where FilmCraft stores cache files").pick_folder();
             apply_cache_choice(&mut session, choice, &setup_version)
@@ -557,13 +557,16 @@ mod tests {
         let before = session.shortcuts.bindings.clone();
         session.prefs.media_cache.location = "/offline-volume/FilmCraft Cache".into();
         assert!(!super::apply_cache_choice(&mut session, None, "custom-version"));
-        assert!(session.prefs.media_cache.location.is_empty());
+        assert_eq!(session.prefs.media_cache.location, "/offline-volume/FilmCraft Cache");
         assert!(session.prefs.media_cache.setup_version.is_empty());
         assert_eq!(session.shortcuts.bindings, before);
         let dir = std::env::temp_dir().join(format!("filmcraft-cache-startup-{}", std::process::id()));
         assert!(super::apply_cache_choice(&mut session, Some(dir.clone()), "custom-version"));
         assert_eq!(session.prefs.media_cache.setup_version, "custom-version");
         assert_eq!(session.prefs.media_cache.location, dir.join("FilmCraft Cache").to_string_lossy());
+        assert!(!super::cache_setup_needed(&session.prefs.media_cache.location, false));
+        assert!(!super::cache_setup_needed("/nonexistent/filmcraft-cache", true));
+        assert!(super::cache_setup_needed("/nonexistent/filmcraft-cache", false));
         assert_eq!(session.shortcuts.bindings, before);
         std::fs::remove_dir_all(dir).unwrap();
     }

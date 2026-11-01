@@ -1321,8 +1321,24 @@ impl FilmcraftApp {
                 })
             }
             "captions.import" => self.pick(FileDialog::open_files(&["srt", "lrc", "vtt", "scc", "mcc", "stl", "ttml", "dfxp", "xml"]), |app, paths| {
-                let Some(path) = paths.into_iter().next() else { return Ok(Value::Null) };
-                app.session.execute("captions.import", json!({"path": path})).map_err(|e| e.to_string())
+                if paths.is_empty() {
+                    return Ok(Value::Null);
+                }
+                let mut imported = Vec::new();
+                let mut errors = Vec::new();
+                for path in paths {
+                    match app.session.execute("captions.import", json!({"path": path})) {
+                        Ok(value) => imported.push(value),
+                        Err(error) => errors.push(format!("{path}: {error}")),
+                    }
+                }
+                if !errors.is_empty() {
+                    app.ui.status = errors.join("; ");
+                }
+                if imported.is_empty() {
+                    return Err(errors.join("; "));
+                }
+                Ok(json!({"imported": imported, "errors": errors}))
             }),
             "captions.export" => {
                 let name = self.session.state.active_sequence.and_then(|s| self.session.project.item(s)).map(|i| i.name.clone()).unwrap_or_default();

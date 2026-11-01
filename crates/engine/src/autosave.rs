@@ -487,6 +487,10 @@ pub fn portable_data_dir(exe_dir: &Path) -> Option<PathBuf> {
     exe_dir.join(PORTABLE_MARKER).is_file().then(|| exe_dir.join("data"))
 }
 
+fn is_test_bundle(executable: &Path) -> bool {
+    executable.parent().and_then(Path::parent).is_some_and(|contents| contents.join("Resources/FilmCraftTestBuild").is_file())
+}
+
 /// The data directory. `FILMCRAFT_DATA_DIR` overrides; a portable install ([`PORTABLE_MARKER`] next
 /// to the executable) uses `<exe dir>/data`; otherwise the per-user directory:
 /// macOS `~/Library/Application Support/FilmCraft`, Windows `%APPDATA%\FilmCraft`,
@@ -500,7 +504,11 @@ pub fn default_data_dir() -> Option<PathBuf> {
         return Some(d);
     }
     if cfg!(target_os = "macos") {
-        return env("HOME").map(|h| h.join("Library/Application Support/FilmCraft"));
+        return env("HOME").map(|h| {
+            let test_bundle = std::env::current_exe().ok().as_deref().is_some_and(is_test_bundle);
+            let name = if test_bundle { "FilmCraft-Test" } else { "FilmCraft" };
+            h.join("Library/Application Support").join(name)
+        });
     }
     if cfg!(windows) {
         return env("APPDATA").map(|h| h.join("FilmCraft"));
@@ -1045,5 +1053,24 @@ impl Worker {
                 Err(m)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test_bundle_tests {
+    use super::*;
+
+    #[test]
+    fn test_bundle_marker_is_detected_only_inside_the_bundle_resources() {
+        let root = std::env::temp_dir().join(format!("filmcraft-test-bundle-{}", std::process::id()));
+        let contents = root.join("FilmCraft-Test.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        std::fs::create_dir_all(contents.join("Resources")).unwrap();
+        let executable = contents.join("MacOS/FilmCraft");
+        assert!(!is_test_bundle(&executable));
+        std::fs::write(contents.join("Resources/FilmCraftTestBuild"), b"").unwrap();
+        assert!(is_test_bundle(&executable));
+        assert!(!is_test_bundle(&root.join("bin/FilmCraft")));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

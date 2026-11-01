@@ -950,6 +950,32 @@ mod tests {
     }
 
     #[test]
+    fn playback_and_paused_commands_remain_independent() {
+        let mut app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        for (name, res) in RES_NAMES {
+            let result = route(&mut app, &format!("view.playbackRes.{name}"), &json!({"monitor": "program"}));
+            assert!(matches!(result, Some(Ok(_))));
+            assert_eq!(app.ui.program.res, res);
+            assert_eq!(app.ui.program.paused_res, PlaybackRes::Full);
+        }
+        let result = route(&mut app, "view.pausedRes.quarter", &json!({"monitor": "program"}));
+        assert!(matches!(result, Some(Ok(_))));
+        assert_eq!(app.ui.program.res, PlaybackRes::Sixteenth);
+        assert_eq!(app.ui.program.paused_res, PlaybackRes::Quarter);
+    }
+
+    #[test]
+    fn every_explicit_resolution_applies_while_playing_and_paused() {
+        for res in PlaybackRes::ALL {
+            let mut view = MonitorView::default();
+            view.res = res;
+            view.paused_res = res;
+            assert_eq!(view.effective_res(true), res);
+            assert_eq!(view.effective_res(false), res);
+        }
+    }
+
+    #[test]
     fn effective_resolution_follows_paused_and_high_quality() {
         let mut v = MonitorView::default();
         assert_eq!(v.effective_res(false), PlaybackRes::Full);

@@ -371,6 +371,9 @@ pub fn range_param(s: &Session, project: &Project, seq: ItemId, v: Option<&Value
 /// Where exports go when no path is given: next to the saved project, else ~/Movies, else the
 /// home directory, else the temporary directory.
 pub fn default_export_dir(s: &Session) -> PathBuf {
+    if let Some(d) = s.path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| !d.as_os_str().is_empty()) {
+        return d.to_path_buf();
+    }
     if let Some(sequence) = s.active_sequence() {
         for track in &sequence.video_tracks {
             for item in &track.items {
@@ -382,9 +385,6 @@ pub fn default_export_dir(s: &Session) -> PathBuf {
                 }
             }
         }
-    }
-    if let Some(d) = s.path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| !d.as_os_str().is_empty()) {
-        return d.to_path_buf();
     }
     if cfg!(target_arch = "wasm32") {
         // the web build's virtual file table: written files are offered as downloads
@@ -414,6 +414,12 @@ fn with_extension(path: &str, settings: &ExportSettings) -> String {
                 || (settings.format == Format::Aac && e.eq_ignore_ascii_case("aac")) =>
         {
             path.to_string()
+        }
+        Some(existing)
+            if filmcraft_media::VIDEO_EXTENSIONS.iter().chain(filmcraft_media::AUDIO_EXTENSIONS).any(|known| known.eq_ignore_ascii_case(existing))
+                || ["mp4", "mov", "mxf", "webm", "avi", "wav", "flac", "aac", "aiff", "aif", "png", "jpg", "jpeg", "tif", "tiff"].iter().any(|known| known.eq_ignore_ascii_case(existing)) =>
+        {
+            Path::new(path).with_extension(ext).to_string_lossy().to_string()
         }
         Some(_) if settings.is_image_sequence() || matches!(settings.format, Format::Aiff) => format!("{}.{ext}", path.rsplit_once('.').map_or(path, |x| x.0)),
         _ => format!("{path}.{ext}"),
@@ -643,19 +649,160 @@ pub struct QueueItem {
 }
 
 /// The export queue (session state).
+#[derive(Serialize, Deserialize)]
+struct SavedQueueItem {
+    id: u64,
+    sequence: ItemId,
+    sequence_name: String,
+    preset: String,
+    settings: ExportSettings,
+    status: QueueStatus,
+    error: Option<String>,
+    project: Arc<Project>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedQueue {
+    version: u32,
+    next_id: u64,
+    quick_preset: Option<String>,
+    items: Vec<SavedQueueItem>,
+}
+
+enum QueueWrite {
+    Snapshot(SavedQueue),
+    Flush(std::sync::mpsc::Sender<std::io::Result<()>>),
+}
+
+fn write_queue_snapshot(path: &Path, snapshot: &SavedQueue) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec(snapshot).map_err(|error| std::io::Error::other(error.to_string()))?;
+    filmcraft_format::atomic_write(path, &bytes)
+}
+
 #[derive(Default)]
 pub struct ExportQueue {
     pub items: Vec<QueueItem>,
-    /// Started: ready items are encoded one after another.
     pub running: bool,
     next_id: u64,
-    /// Quick Export's preset (the last one used).
     pub quick_preset: Option<String>,
+    storage_path: Option<PathBuf>,
+    writer: Option<std::sync::mpsc::Sender<QueueWrite>>,
 }
 
 impl ExportQueue {
     pub fn is_active(&self) -> bool {
         self.items.iter().any(|i| i.status == QueueStatus::Encoding) || (self.running && self.items.iter().any(|i| i.status == QueueStatus::Ready))
+    }
+
+    pub fn set_dir(&mut self, dir: &Path) {
+        let path = dir.join("export-queue.json");
+        self.storage_path = Some(path.clone());
+        if let Ok(bytes) = std::fs::read(&path) {
+            match serde_json::from_slice::<SavedQueue>(&bytes) {
+                Ok(saved) if saved.version == 1 => {
+                    self.next_id = saved.next_id.max(saved.items.iter().map(|item| item.id).max().unwrap_or(0));
+                    self.quick_preset = saved.quick_preset;
+                    self.items = saved
+                        .items
+                        .into_iter()
+                        .map(|item| {
+                            let interrupted = item.status == QueueStatus::Encoding;
+                            QueueItem {
+                                id: item.id,
+                                sequence: item.sequence,
+                                sequence_name: item.sequence_name,
+                                preset: item.preset,
+                                settings: item.settings,
+                                status: if interrupted { QueueStatus::Failed } else { item.status },
+                                job: None,
+                                error: if interrupted { Some("Export interrupted by application shutdown; retry to restart".into()) } else { item.error },
+                                project: item.project,
+                            }
+                        })
+                        .collect();
+                }
+                Ok(saved) => log::warn!("Unsupported export queue version {} at {}", saved.version, path.display()),
+                Err(error) => log::warn!("Cannot restore export queue from {}: {error}", path.display()),
+            }
+        }
+        let (sender, receiver) = std::sync::mpsc::channel::<QueueWrite>();
+        match std::thread::Builder::new().name("filmcraft-export-queue".into()).spawn(move || {
+            while let Ok(message) = receiver.recv() {
+                match message {
+                    QueueWrite::Snapshot(mut latest) => {
+                        let mut barrier = None;
+                        while let Ok(next) = receiver.try_recv() {
+                            match next {
+                                QueueWrite::Snapshot(snapshot) => latest = snapshot,
+                                QueueWrite::Flush(tx) => {
+                                    barrier = Some(tx);
+                                    break;
+                                }
+                            }
+                        }
+                        let result = write_queue_snapshot(&path, &latest);
+                        if let Some(tx) = barrier {
+                            let _ = tx.send(result);
+                        } else if let Err(error) = result {
+                            log::warn!("Could not persist export queue: {error}");
+                        }
+                    }
+                    QueueWrite::Flush(tx) => {
+                        let _ = tx.send(Ok(()));
+                    }
+                }
+            }
+        }) {
+            Ok(_) => self.writer = Some(sender),
+            Err(error) => {
+                self.writer = None;
+                log::warn!("Could not start export queue persistence worker: {error}");
+            }
+        }
+    }
+
+    pub fn persist(&self) -> std::io::Result<()> {
+        if self.storage_path.is_none() {
+            return Ok(());
+        }
+        let Some(writer) = &self.writer else {
+            return Err(std::io::Error::other("export queue persistence worker unavailable"));
+        };
+        let saved = SavedQueue {
+            version: 1,
+            next_id: self.next_id,
+            quick_preset: self.quick_preset.clone(),
+            items: self
+                .items
+                .iter()
+                .map(|item| SavedQueueItem {
+                    id: item.id,
+                    sequence: item.sequence,
+                    sequence_name: item.sequence_name.clone(),
+                    preset: item.preset.clone(),
+                    settings: item.settings.clone(),
+                    status: item.status,
+                    error: item.error.clone(),
+                    project: Arc::clone(&item.project),
+                })
+                .collect(),
+        };
+        writer.send(QueueWrite::Snapshot(saved)).map_err(|_| std::io::Error::other("export queue persistence worker disconnected"))
+    }
+
+    pub fn flush(&self) -> std::io::Result<()> {
+        let Some(writer) = &self.writer else {
+            return if self.storage_path.is_none() { Ok(()) } else { Err(std::io::Error::other("export queue persistence worker unavailable")) };
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        writer.send(QueueWrite::Flush(tx)).map_err(|_| std::io::Error::other("export queue persistence worker disconnected"))?;
+        rx.recv().map_err(|_| std::io::Error::other("export queue flush interrupted"))?
+    }
+}
+
+fn persist_queue(s: &Session) {
+    if let Err(error) = s.export_queue.persist() {
+        log::warn!("Could not save export queue: {error}");
     }
 }
 
@@ -725,10 +872,14 @@ pub fn pump_queue(s: &mut Session, wait: bool) {
             finished_any = true;
         }
         if s.export_queue.items.iter().any(|i| i.status == QueueStatus::Encoding) || !s.export_queue.running {
+            if finished_any {
+                persist_queue(s);
+            }
             return;
         }
         let Some(i) = s.export_queue.items.iter().position(|i| i.status == QueueStatus::Ready) else {
             s.export_queue.running = false;
+            persist_queue(s);
             if finished_any || !wait {
                 let failed = s.export_queue.items.iter().filter(|i| i.status == QueueStatus::Failed).count();
                 let message = if failed > 0 { format!("Export queue finished ({failed} failed)") } else { "Export queue finished".into() };
@@ -751,6 +902,7 @@ pub fn pump_queue(s: &mut Session, wait: bool) {
                 x.error = Some(e.to_string());
             }
         }
+        persist_queue(s);
         if !wait {
             return;
         }
@@ -1226,6 +1378,50 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod guard_tests {
     use super::*;
+
+    #[test]
+    fn default_export_path_uses_saved_project_directory() {
+        let mut session = Session::default();
+        session.path = Some("/tmp/filmcraft-test/project/sequence.fcproj".into());
+        assert_eq!(default_export_dir(&session), PathBuf::from("/tmp/filmcraft-test/project"));
+    }
+
+    #[test]
+    fn media_export_extensions_replace_existing_media_suffixes() {
+        let settings = ExportSettings::default();
+        assert_eq!(with_extension("/tmp/sequence.mov", &settings), "/tmp/sequence.mp4");
+        assert_eq!(with_extension("/tmp/sequence.mp4", &settings), "/tmp/sequence.mp4");
+        assert_eq!(with_extension("/tmp/sequence.v2", &settings), "/tmp/sequence.v2.mp4");
+    }
+
+    #[test]
+    fn export_queue_round_trips_with_interrupted_items() {
+        let dir = std::env::temp_dir().join(format!("filmcraft-export-queue-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut queue = ExportQueue::default();
+        queue.set_dir(&dir);
+        queue.items.push(QueueItem {
+            id: 42,
+            sequence: ItemId(12),
+            sequence_name: "Sequence".into(),
+            preset: "Default".into(),
+            settings: ExportSettings::default(),
+            status: QueueStatus::Encoding,
+            job: Some(123),
+            error: None,
+            project: Arc::new(Project::default()),
+        });
+        queue.persist().unwrap();
+        queue.flush().unwrap();
+        let mut restored = ExportQueue::default();
+        restored.set_dir(&dir);
+        assert_eq!(restored.next_id, 42);
+        assert_eq!(restored.items.len(), 1);
+        assert_eq!(restored.items[0].status, QueueStatus::Failed);
+        assert!(restored.items[0].error.as_deref().is_some_and(|error| error.contains("interrupted")));
+        assert!(restored.items[0].job.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A panicking job body must leave the job finished with an error, not "running" forever.
     #[test]

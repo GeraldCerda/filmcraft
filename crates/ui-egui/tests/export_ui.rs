@@ -385,8 +385,7 @@ fn export_button_and_quick_export_popup() {
 }
 
 #[test]
-fn quick_export_file_name_can_be_typed_and_the_folder_link_opens_the_save_dialog() {
-    use std::sync::{Arc, Mutex};
+fn quick_export_file_name_and_folder_do_not_open_a_second_save_dialog() {
     let mut d = Driver::new("quick-location");
     d.exec("markers.markIn", json!({"seconds": 0.0}));
     d.exec("markers.markOut", json!({"seconds": 0.2}));
@@ -404,29 +403,21 @@ fn quick_export_file_name_can_be_typed_and_the_folder_link_opens_the_save_dialog
     d.frames(2);
     let typed = PathBuf::from(&d.app().ui.export.quick_path);
     assert_eq!(typed, start.parent().unwrap().join("renamed.wav"));
-    // the folder link asks the save dialog, seeded with the whole path; cancelling changes nothing
-    let asked: Arc<Mutex<Vec<(Vec<String>, String)>>> = Arc::default();
-    let answer: Arc<Mutex<Option<String>>> = Arc::default();
-    let (log, reply) = (asked.clone(), answer.clone());
-    d.app().hooks.pick_save_as = Some(Box::new(move |_, exts, suggested| {
-        log.lock().unwrap().push((exts.iter().map(|e| e.to_string()).collect(), suggested.to_string()));
-        reply.lock().unwrap().clone()
-    }));
+    let destination = d.dir.join("picked-folder");
+    std::fs::create_dir_all(&destination).unwrap();
+    let chosen = destination.to_string_lossy().to_string();
+    d.app().hooks.pick_folder = Some(Box::new(move || Some(chosen.clone())));
+    d.app().hooks.pick_save_as = Some(Box::new(|_, _, _| panic!("Quick Export must not reopen the Save As dialog")));
     d.click("quickExport.location");
-    assert_eq!(asked.lock().unwrap().clone(), [(vec!["wav".to_string()], typed.to_string_lossy().to_string())]);
-    assert_eq!(PathBuf::from(&d.app().ui.export.quick_path), typed);
-    assert!(d.app().ui.export.quick_open, "the popup stays open");
-    // a chosen path is applied and shown; another format's extension follows the preset
-    *answer.lock().unwrap() = Some(d.path("picked.mp4"));
-    d.click("quickExport.location");
-    let picked = d.path("picked.wav");
-    assert_eq!(d.app().ui.export.quick_path, picked);
+    let picked = destination.join("renamed.wav");
+    assert_eq!(PathBuf::from(&d.app().ui.export.quick_path), picked);
+    assert!(d.app().ui.export.quick_open);
     let shown = d.ok("ui.elements", json!({"prefix": "quickExport.location"}))[0]["label"].as_str().unwrap().to_string();
-    assert_eq!(shown, d.dir.to_string_lossy());
+    assert_eq!(shown, destination.to_string_lossy());
     d.snapshot("export-quick-location");
     d.click("quickExport.go");
     d.wait_until("quick export", |d| d.app().session.jobs.iter().all(|j| j.progress.finished.load(std::sync::atomic::Ordering::Relaxed)));
-    assert!(Path::new(&d.path("picked.wav")).exists(), "{}", d.app().ui.status);
+    assert!(picked.exists(), "{}", d.app().ui.status);
 }
 
 #[test]
@@ -525,7 +516,12 @@ fn cancelling_export_destination_never_starts_or_queues_a_job() {
     d.click("export.sendToQueue");
     assert!(d.app().session.export_queue.items.is_empty());
     d.click("header.quickExport");
+    let existing = d.path("already-exists.wav");
+    std::fs::write(&existing, b"existing").unwrap();
+    d.ok("ui.set", json!({"export": {"quickPreset": "Waveform Audio 48 kHz 16-bit", "quickPath": existing}}));
+    d.frames(2);
     d.click("quickExport.go");
     assert_eq!(d.app().session.jobs.len(), jobs);
     assert!(d.app().ui.export.quick_open);
+    assert_eq!(std::fs::read(d.path("already-exists.wav")).unwrap(), b"existing");
 }

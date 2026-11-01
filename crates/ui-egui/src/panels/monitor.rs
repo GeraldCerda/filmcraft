@@ -1,7 +1,5 @@
 //! Source and Program monitors.
 //!
-//! Frames come from the background [`FrameServer`](crate::frames::FrameServer) at the *smaller* of
-//! the playback resolution and the on-screen resolution (so a small monitor never pays for 4K).
 //! While playing we prefetch the next frames in priority order; while scrubbing the exact frame is
 //! requested first and the nearest cached frame is shown until it arrives (no black flashes), or
 //! failing that the frame asked for a refresh earlier, so the picture follows a scrub or a value
@@ -176,9 +174,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         ui.painter().rect_filled(pic, 0.0, t.monitor_bg);
         let playing = if which == Which::Program { app.playback.playing } else { app.source_playback.clock.playing };
         let res = mv.effective_res(playing);
-        // frame pixels per screen pixel along the axis that needs the most of them
-        let screen_scale = (pic.width() * ppp / frame_size.0.max(1) as f32).max(pic.height() * ppp / frame_size.1.max(1) as f32).min(1.0);
-        let scale = quantize_scale(res.scale().min(screen_scale.max(1.0 / 32.0)));
+        let scale = quantize_scale(res.scale());
         let frame = rate.frame_at(time);
         let rev = match target {
             Target::Item(i) => app.item_revision(i),
@@ -355,7 +351,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
     let zresp = crate::widgets::dropdown_text(ui, zr, &zoom_label, &t, egui::Id::new((prefix, "zoom")));
     app.auto.add(&format!("{prefix}.zoom"), zr, "Select Zoom Level");
     monitor_view::zoom_menu(app, &zresp, which);
-    let res = mv.res;
+    let playing = if which == Which::Program { app.playback.playing } else { app.source_playback.clock.playing };
+    let res = mv.effective_res(playing);
     let resolution_x = if stacked_controls && which == Which::Source && !separate_source_drag {
         row1.max.x - 90.0
     } else if stacked_controls {
@@ -371,11 +368,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         crate::panels::source_drag::controls(app, ui, Rect::from_min_size(pos2(row1.center().x - 52.0, settings_y + 26.0), vec2(104.0, 24.0)));
     }
     let rresp = crate::widgets::dropdown_text(ui, rr, crate::i18n::t(res.label()), &t, egui::Id::new((prefix, "res")));
-    app.auto.add(&format!("{prefix}.resolution"), rr, "Select Playback Resolution");
+    app.auto.add(&format!("{prefix}.resolution"), rr, "Select Preview Resolution");
     egui::Popup::menu(&rresp).show(|ui| {
-        for r in PlaybackRes::ALL {
-            if ui.selectable_label(r == res, crate::i18n::t(r.label())).clicked() {
-                monitor_view::view_mut(app, which).res = r;
+for r in PlaybackRes::ALL {
+            let response = ui.selectable_label(r == res, crate::i18n::t(r.label()));
+            app.auto.add(&format!("{prefix}.resolution.{r:?}").to_lowercase(), response.rect, r.label());
+            if response.clicked() {
+                let view = monitor_view::view_mut(app, which);
+                view.res = r;
+                view.paused_res = r;
             }
         }
     });
@@ -1132,6 +1133,21 @@ mod tests {
 
     fn flat(w: usize, h: usize, rgba: [u8; 4]) -> Rgba {
         Rgba { w, h, px: rgba.iter().copied().cycle().take(w * h * 4).collect() }
+    }
+
+    #[test]
+    fn explicit_resolution_scales_do_not_collapse_to_the_monitor_size() {
+        let resolutions = [
+            (PlaybackRes::Full, 1.0),
+            (PlaybackRes::Half, 0.5),
+            (PlaybackRes::Quarter, 0.25),
+            (PlaybackRes::Eighth, 0.125),
+            (PlaybackRes::Sixteenth, 0.0625),
+        ];
+        for (resolution, expected) in resolutions {
+            assert_eq!(quantize_scale(resolution.scale()), expected);
+        }
+        assert_ne!(quantize_scale(PlaybackRes::Half.scale()), quantize_scale(PlaybackRes::Quarter.scale()));
     }
 
     #[test]

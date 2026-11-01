@@ -66,6 +66,19 @@ fn composites_tracks_and_opacity() {
 }
 
 #[test]
+fn explicit_preview_fractions_render_the_expected_pixel_dimensions() {
+    let (mut project, red, _ocean, sequence, sources) = setup();
+    place(&mut project, sequence, 0, red, 0, 24);
+    for (scale, width, height) in [(1.0, 320, 180), (0.5, 160, 90), (0.25, 80, 45), (0.125, 40, 23), (0.0625, 20, 11)] {
+        let options = RenderOptions { scale, ..Default::default() };
+        let expected = (width, height);
+        assert_eq!(output_size(project.sequence(sequence).unwrap(), scale), expected);
+        let image = render_sequence(&project, sequence, Tick::ZERO, options, &sources);
+        assert_eq!((image.w, image.h), expected, "render scale {scale}");
+    }
+}
+
+#[test]
 fn half_resolution_matches_full_downsampled() {
     let (mut p, _red, ocean, seq, map) = setup();
     place(&mut p, seq, 0, ocean, 0, 48);

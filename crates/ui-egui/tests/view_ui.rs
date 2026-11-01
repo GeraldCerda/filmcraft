@@ -122,6 +122,19 @@ fn item_duration(v: &Value, item: u64) -> Option<f64> {
 }
 
 #[test]
+fn monitor_dropdown_updates_playing_and_paused_resolution() {
+    let mut d = Driver::demo();
+    for (option, expected) in [("full", "Full"), ("half", "Half"), ("quarter", "Quarter"), ("eighth", "Eighth"), ("sixteenth", "Sixteenth")] {
+        d.click("program.resolution");
+        assert!(d.try_rect(&format!("program.resolution.{option}")).is_some(), "{option}");
+        d.click(&format!("program.resolution.{option}"));
+        let view = d.program();
+        assert_eq!(view["res"], expected);
+        assert_eq!(view["paused_res"], expected);
+    }
+}
+
+#[test]
 fn view_menu_resolutions_and_display_modes() {
     let mut d = Driver::demo();
     let menu = d.ok("ui.menu.list", json!({}));

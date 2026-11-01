@@ -2,7 +2,7 @@ name: FilmCraft macOS verification
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'fix/**']
   pull_request:
   workflow_dispatch:
 
@@ -39,7 +39,7 @@ jobs:
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.95.0
       - name: Core regression tests
-        run: cargo test --locked -p filmcraft-engine -p filmcraft-ui-egui -p filmcraft-edit -p filmcraft-export -p filmcraft
+        run: cargo test --locked -p filmcraft-captions -p filmcraft-render -p filmcraft-engine -p filmcraft-ui-egui -p filmcraft-edit -p filmcraft-export -p filmcraft
       - name: Desktop compilation verification
         run: cargo check --locked -p filmcraft
       - name: Installer shell syntax
