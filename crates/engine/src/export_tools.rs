@@ -371,6 +371,9 @@ pub fn range_param(s: &Session, project: &Project, seq: ItemId, v: Option<&Value
 /// Where exports go when no path is given: next to the saved project, else ~/Movies, else the
 /// home directory, else the temporary directory.
 pub fn default_export_dir(s: &Session) -> PathBuf {
+    if let Some(d) = s.path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| !d.as_os_str().is_empty()) {
+        return d.to_path_buf();
+    }
     if let Some(sequence) = s.active_sequence() {
         for track in &sequence.video_tracks {
             for item in &track.items {
@@ -382,9 +385,6 @@ pub fn default_export_dir(s: &Session) -> PathBuf {
                 }
             }
         }
-    }
-    if let Some(d) = s.path.as_deref().and_then(|p| Path::new(p).parent()).filter(|d| !d.as_os_str().is_empty()) {
-        return d.to_path_buf();
     }
     if cfg!(target_arch = "wasm32") {
         // the web build's virtual file table: written files are offered as downloads
@@ -1324,6 +1324,13 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod guard_tests {
     use super::*;
+
+    #[test]
+    fn default_export_path_uses_saved_project_directory() {
+        let mut session = Session::default();
+        session.path = Some("/tmp/filmcraft-test/project/sequence.fcproj".into());
+        assert_eq!(default_export_dir(&session), PathBuf::from("/tmp/filmcraft-test/project"));
+    }
 
     #[test]
     fn media_export_extensions_replace_existing_media_suffixes() {
