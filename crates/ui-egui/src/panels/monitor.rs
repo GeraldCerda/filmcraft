@@ -1,7 +1,5 @@
 //! Source and Program monitors.
 //!
-//! Frames come from the background [`FrameServer`](crate::frames::FrameServer) at the *smaller* of
-//! the playback resolution and the on-screen resolution (so a small monitor never pays for 4K).
 //! While playing we prefetch the next frames in priority order; while scrubbing the exact frame is
 //! requested first and the nearest cached frame is shown until it arrives (no black flashes), or
 //! failing that the frame asked for a refresh earlier, so the picture follows a scrub or a value
@@ -372,8 +370,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
     let rresp = crate::widgets::dropdown_text(ui, rr, crate::i18n::t(res.label()), &t, egui::Id::new((prefix, "res")));
     app.auto.add(&format!("{prefix}.resolution"), rr, "Select Preview Resolution");
     egui::Popup::menu(&rresp).show(|ui| {
-        for r in PlaybackRes::ALL {
-            if ui.selectable_label(r == res, crate::i18n::t(r.label())).clicked() {
+for r in PlaybackRes::ALL {
+            let response = ui.selectable_label(r == res, crate::i18n::t(r.label()));
+            app.auto.add(&format!("{prefix}.resolution.{r:?}").to_lowercase(), response.rect, r.label());
+            if response.clicked() {
                 let view = monitor_view::view_mut(app, which);
                 view.res = r;
                 view.paused_res = r;
