@@ -6,6 +6,7 @@ if [ "$(uname -s)" != Darwin ]; then
 fi
 source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 version="$(awk '/^\[workspace.package\]/{section=1;next} /^\[/{section=0} section && /^version =/{gsub(/"/,"",$3); print $3; exit}' "$source_dir/Cargo.toml")"
+short_version="${version%%-*}"
 build_sha="$(git -C "$source_dir" rev-parse --short HEAD)"
 if [ -z "$version" ] || [ -z "$build_sha" ]; then
     printf 'Cannot determine FilmCraft source version and revision.\n' >&2
@@ -87,7 +88,7 @@ trap 'exit 143' TERM
 if [ "$fresh" = 1 ]; then
     run_install mkdir -p "$stage_app/Contents/MacOS" "$stage_app/Contents/Resources"
     run_install cp "$source_dir/assets/app-icon/filmcraft.icns" "$stage_app/Contents/Resources/FilmCraft.icns"
-    sed -e "s/@VERSION@/$version/g" -e "s/@SHORT_VERSION@/$version/g" -e "s/@BUILD_SHA@/$build_sha/g" "$source_dir/packaging/macos/Info.plist.in" >"$build_dir/Info.plist"
+    sed -e "s/@VERSION@/$version/g" -e "s/@SHORT_VERSION@/$short_version/g" -e "s/@BUILD_SHA@/$build_sha/g" "$source_dir/packaging/macos/Info.plist.in" >"$build_dir/Info.plist"
     printf 'APPL????' >"$build_dir/PkgInfo"
     run_install cp "$build_dir/Info.plist" "$stage_app/Contents/Info.plist"
     run_install cp "$build_dir/PkgInfo" "$stage_app/Contents/PkgInfo"
@@ -96,8 +97,8 @@ else
 fi
 run_install cp "$build_dir/release/filmcraft" "$stage_app/Contents/MacOS/$executable"
 run_install chmod 755 "$stage_app/Contents/MacOS/$executable"
-run_install /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$stage_app/Contents/Info.plist"
-run_install /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$stage_app/Contents/Info.plist"
+run_install /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $short_version" "$stage_app/Contents/Info.plist"
+run_install /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $short_version" "$stage_app/Contents/Info.plist"
 run_install /usr/libexec/PlistBuddy -c 'Delete :FilmCraftVersion' "$stage_app/Contents/Info.plist" 2>/dev/null || true
 run_install /usr/libexec/PlistBuddy -c "Add :FilmCraftVersion string $version-custom-$build_sha" "$stage_app/Contents/Info.plist"
 run_install /usr/libexec/PlistBuddy -c 'Delete :FilmCraftBuildCommit' "$stage_app/Contents/Info.plist" 2>/dev/null || true
